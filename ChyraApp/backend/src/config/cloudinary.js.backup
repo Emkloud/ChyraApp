@@ -1,0 +1,114 @@
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
+
+// Verify connection (non-blocking)
+cloudinary.api.ping()
+  .then(() => console.log('✅ Cloudinary connected successfully'))
+  .catch((error) => console.error('❌ Cloudinary connection failed:', error?.message || error));
+
+// Configure Cloudinary storage for profile pictures
+const profilePictureStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_FOLDER || 'chyraapp/profiles',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+    transformation: [
+      { width: 500, height: 500, crop: 'fill', gravity: 'face' },
+      { quality: 'auto:good' },
+      { fetch_format: 'auto' }
+    ],
+    public_id: (req, file) => {
+      const userId = req.user?.id || 'unknown';
+      const timestamp = Date.now();
+      return `profile_${userId}_${timestamp}`;
+    }
+  }
+});
+
+// Configure Cloudinary storage for general media
+const mediaStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'chyraapp/media',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'avi'],
+    resource_type: 'auto',
+    transformation: [
+      { quality: 'auto:good' },
+      { fetch_format: 'auto' }
+    ],
+    public_id: (req, file) => {
+      const userId = req.user?.id || 'unknown';
+      const timestamp = Date.now();
+      const filename = (file.originalname || 'upload').split('.')[0];
+      return `${userId}_${timestamp}_${filename}`;
+    }
+  }
+});
+
+// Multer upload configurations
+const uploadProfilePicture = multer({
+  storage: profilePictureStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      cb(new Error('Only image files are allowed!'), false);
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+const uploadMedia = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/', 'video/'];
+    const isAllowed = allowedTypes.some(type => file.mimetype.startsWith(type));
+    if (!isAllowed) {
+      cb(new Error('Only image and video files are allowed!'), false);
+      return;
+    }
+    cb(null, true);
+  }
+});
+
+// Helper function to delete file from Cloudinary
+const deleteFromCloudinary = async (publicId) => {
+  try {
+    const result = await cloudinary.uploader.destroy(publicId);
+    console.log('Deleted from Cloudinary:', publicId, result);
+    return result;
+  } catch (error) {
+    console.error('Error deleting from Cloudinary:', error?.message || error);
+    throw error;
+  }
+};
+
+// Helper function to get optimized URL
+const getOptimizedUrl = (publicId, options = {}) => {
+  const defaultOptions = {
+    width: 500,
+    height: 500,
+    crop: 'fill',
+    quality: 'auto',
+    fetch_format: 'auto'
+  };
+  return cloudinary.url(publicId, { ...defaultOptions, ...options });
+};
+
+module.exports = {
+  cloudinary,
+  uploadProfilePicture,
+  uploadMedia,
+  deleteFromCloudinary,
+  getOptimizedUrl
+};

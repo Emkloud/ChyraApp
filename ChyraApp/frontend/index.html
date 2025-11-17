@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      window.global = window;
+    </script>
+    
+    <!-- ✅ Favicon & Basic Meta -->
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    
+    <!-- ✅ PWA Meta Tags -->
+    <meta name="theme-color" content="#9333ea" />
+    <meta name="description" content="ChyraApp - Real-time messaging with friends and family. Send messages, make voice and video calls, share media, and stay connected." />
+    <meta name="keywords" content="chat app, messaging, real-time chat, video calls, voice calls, instant messaging" />
+    <meta name="author" content="ChyraApp Team" />
+    
+    <!-- ✅ PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- ✅ Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152x152.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192x192.png" />
+    <link rel="apple-touch-icon" sizes="167x167" href="/icons/icon-192x192.png" />
+    
+    <!-- ✅ iOS Specific Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ChyraApp" />
+    <meta name="format-detection" content="telephone=no" />
+    
+    <!-- ✅ Android/Chrome -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="ChyraApp" />
+    
+    <!-- ✅ Windows/Microsoft -->
+    <meta name="msapplication-TileColor" content="#9333ea" />
+    <meta name="msapplication-TileImage" content="/icons/icon-144x144.png" />
+    <meta name="msapplication-config" content="/browserconfig.xml" />
+    <meta name="msapplication-tap-highlight" content="no" />
+    
+    <!-- ✅ Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://chyraapp.com/" />
+    <meta property="og:title" content="ChyraApp - Real-Time Messaging" />
+    <meta property="og:description" content="Connect with friends and family through real-time messaging, voice and video calls" />
+    <meta property="og:image" content="https://chyraapp.com/og-image.jpg" />
+    <meta property="og:site_name" content="ChyraApp" />
+    <meta property="og:locale" content="en_US" />
+    
+    <!-- ✅ Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://chyraapp.com/" />
+    <meta name="twitter:title" content="ChyraApp - Real-Time Messaging" />
+    <meta name="twitter:description" content="Connect with friends and family through real-time messaging, voice and video calls" />
+    <meta name="twitter:image" content="https://chyraapp.com/twitter-image.jpg" />
+    <meta name="twitter:creator" content="@chyraapp" />
+    
+    <!-- ✅ Additional SEO -->
+    <link rel="canonical" href="https://chyraapp.com/" />
+    <meta name="robots" content="index, follow" />
+    <meta name="googlebot" content="index, follow" />
+    
+    <!-- ✅ Preconnect to improve performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    
+    <!-- ✅ DNS Prefetch for faster loading -->
+    <link rel="dns-prefetch" href="https://www.google-analytics.com" />
+    
+    <title>ChyraApp - Real-Time Messaging & Calls</title>
+    
+    <style>
+      /* ✅ Prevent blank screen on load */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+          'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        background-color: #1a1a2e;
+        color: #ffffff;
+      }
+      
+      #root {
+        min-height: 100vh;
+      }
+      
+      /* ✅ Loading Screen */
+      #app-loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        z-index: 9999;
+        transition: opacity 0.3s ease-out;
+      }
+      
+      #app-loading.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      
+      .loading-content {
+        text-align: center;
+      }
+      
+      .loading-logo {
+        width: 80px;
+        height: 80px;
+        margin: 0 auto 20px;
+        background: white;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 40px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      
+      .loading-title {
+        color: white;
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      
+      .loading-text {
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 14px;
+        margin-top: 10px;
+      }
+      
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        margin: 20px auto 0;
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 1s ease-in-out infinite;
+      }
+      
+      @keyframes pulse {
+        0%, 100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.05);
+        }
+      }
+      
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      
+      /* ✅ Prevent FOUC (Flash of Unstyled Content) */
+      #root:empty + #app-loading {
+        display: flex;
+      }
+      
+      /* ✅ iOS Safe Area */
+      @supports (padding: max(0px)) {
+        body {
+          padding-left: max(0px, env(safe-area-inset-left));
+          padding-right: max(0px, env(safe-area-inset-right));
+        }
+      }
+      
+      /* ✅ Disable pull-to-refresh on mobile */
+      body {
+        overscroll-behavior-y: contain;
+      }
+      
+      /* ✅ Better touch targets for mobile */
+      @media (hover: none) and (pointer: coarse) {
+        button,
+        a,
+        input,
+        select,
+        textarea {
+          min-height: 44px;
+          min-width: 44px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ✅ Loading Screen -->
+    <div id="app-loading">
+      <div class="loading-content">
+        <div class="loading-logo">💬</div>
+        <h2 class="loading-title">ChyraApp</h2>
+        <p class="loading-text">Loading your conversations...</p>
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+    
+    <!-- ✅ App Root -->
+    <div id="root"></div>
+    
+    <!-- ✅ Main App Script -->
+    <script type="module" src="/src/main.jsx"></script>
+    
+    <!-- ✅ Remove Loading Screen When App Loads -->
+    <script>
+      window.addEventListener('load', () => {
+        const loader = document.getElementById('app-loading');
+        if (loader) {
+          loader.classList.add('fade-out');
+          setTimeout(() => {
+            loader.style.display = 'none';
+          }, 300);
+        }
+      });
+      
+      // ✅ Fallback: Remove after 5 seconds regardless
+      setTimeout(() => {
+        const loader = document.getElementById('app-loading');
+        if (loader) {
+          loader.style.display = 'none';
+        }
+      }, 5000);
+    </script>
+    
+    <!-- ✅ No JavaScript Fallback -->
+    <noscript>
+      <div style="
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        text-align: center;
+        padding: 20px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      ">
+        <div>
+          <h1 style="font-size: 32px; margin-bottom: 20px;">JavaScript Required</h1>
+          <p style="font-size: 18px; opacity: 0.9;">
+            ChyraApp requires JavaScript to run. Please enable JavaScript in your browser settings.
+          </p>
+        </div>
+      </div>
+    </noscript>
+  </body>
+</html>

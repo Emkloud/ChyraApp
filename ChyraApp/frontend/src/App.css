@@ -1,0 +1,30 @@
+/* Basic app-level styles required by App.jsx import */
+
+html, body, #root {
+  height: 100%;
+}
+
+.app {
+  height: 100%;
+}
+
+/* Utility classes used in components */
+.gradient-text {
+  background: linear-gradient(90deg, #7c3aed, #2563eb);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(0,0,0,0.1);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

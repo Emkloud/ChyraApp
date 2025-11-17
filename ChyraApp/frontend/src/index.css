@@ -1,0 +1,663 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   CUSTOM SCROLLBAR (Enhanced with Gradient)
+   ============================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #9333ea, #ec4899);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, #7c3aed, #db2777);
+}
+
+/* ============================================
+   SMOOTH SCROLLING & TRANSITIONS
+   ============================================ */
+html {
+  scroll-behavior: smooth;
+}
+
+* {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 200ms;
+  transition-timing-function: ease-in-out;
+}
+
+/* ============================================
+   CUSTOM ANIMATIONS (Original + New)
+   ============================================ */
+
+/* Slide In Animation */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Slide Up Animation (NEW) */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Slide Down Animation (NEW) */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fade In Animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Scale In Animation (NEW) */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Shimmer Effect (NEW) */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+/* Spin Animation */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulse Animation */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Bounce Animation (NEW) */
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* ============================================
+   ANIMATION CLASSES
+   ============================================ */
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-slideDown {
+  animation: slideDown 0.3s ease-out;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.2s ease-out;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.pulse-dot {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ============================================
+   MESSAGE BUBBLE STYLES
+   ============================================ */
+.message-sent {
+  @apply bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-2xl rounded-br-sm shadow-lg;
+}
+
+.message-received {
+  @apply bg-white text-gray-800 rounded-2xl rounded-bl-sm shadow-md border border-gray-100;
+}
+
+/* ============================================
+   GRADIENT TEXT
+   ============================================ */
+.gradient-text {
+  @apply bg-gradient-to-r from-purple-600 via-blue-600 to-indigo-600 bg-clip-text text-transparent;
+}
+
+.gradient-text-purple-pink {
+  @apply bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent;
+}
+
+/* ============================================
+   GLASS EFFECT
+   ============================================ */
+.glass-effect {
+  @apply bg-white bg-opacity-10 backdrop-blur-lg;
+}
+
+.glass-effect-dark {
+  @apply bg-gray-900 bg-opacity-20 backdrop-blur-lg;
+}
+
+/* ============================================
+   CHAT BACKGROUND PATTERN
+   ============================================ */
+.chat-background {
+  background-image: 
+    linear-gradient(45deg, #f8f9fa 25%, transparent 25%),
+    linear-gradient(-45deg, #f8f9fa 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #f8f9fa 75%),
+    linear-gradient(-45deg, transparent 75%, #f8f9fa 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  background-color: #e5e7eb;
+}
+
+/* WhatsApp-style chat background (NEW) */
+.chat-background-whatsapp {
+  background-color: #efeae2;
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d9d9d9' fill-opacity='0.1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ============================================
+   LOADING SPINNER
+   ============================================ */
+.spinner {
+  border: 3px solid rgba(147, 51, 234, 0.3);
+  border-radius: 50%;
+  border-top-color: #9333ea;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s ease-in-out infinite;
+}
+
+.spinner-small {
+  border: 2px solid rgba(147, 51, 234, 0.3);
+  border-radius: 50%;
+  border-top-color: #9333ea;
+  width: 20px;
+  height: 20px;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Shimmer Loading Effect (NEW) */
+.shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    #f6f7f8 0%,
+    #edeef1 20%,
+    #f6f7f8 40%,
+    #f6f7f8 100%
+  );
+  background-size: 1000px 100%;
+}
+
+/* ============================================
+   CUSTOM BUTTON STYLES
+   ============================================ */
+.btn-primary {
+  @apply px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-medium rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105;
+}
+
+.btn-secondary {
+  @apply px-6 py-3 bg-white text-gray-800 font-medium rounded-lg hover:bg-gray-50 transition-all duration-300 border border-gray-300 hover:border-gray-400;
+}
+
+.btn-danger {
+  @apply px-6 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white font-medium rounded-lg hover:from-red-600 hover:to-red-700 transition-all duration-300 shadow-lg hover:shadow-xl;
+}
+
+.btn-success {
+  @apply px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white font-medium rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-300 shadow-lg hover:shadow-xl;
+}
+
+/* ============================================
+   INPUT & FORM STYLES
+   ============================================ */
+input:focus,
+textarea:focus,
+select:focus {
+  @apply ring-2 ring-purple-500 ring-opacity-50 border-purple-500 outline-none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  @apply text-gray-400;
+}
+
+.input-error {
+  @apply border-red-500 ring-2 ring-red-200;
+}
+
+/* ============================================
+   TOOLTIP
+   ============================================ */
+.tooltip {
+  @apply absolute invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gray-900 text-white text-xs rounded-lg py-2 px-3 z-50;
+}
+
+/* ============================================
+   BADGE STYLES (NEW)
+   ============================================ */
+.badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.badge-primary {
+  @apply bg-purple-100 text-purple-800;
+}
+
+.badge-success {
+  @apply bg-green-100 text-green-800;
+}
+
+.badge-danger {
+  @apply bg-red-100 text-red-800;
+}
+
+.badge-warning {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+/* ============================================
+   CARD STYLES (NEW)
+   ============================================ */
+.card {
+  @apply bg-white rounded-2xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl;
+}
+
+.card-gradient {
+  @apply bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl shadow-lg p-6 border border-purple-100;
+}
+
+/* ============================================
+   AVATAR STYLES (NEW)
+   ============================================ */
+.avatar {
+  @apply rounded-full flex items-center justify-center font-semibold text-white shadow-lg;
+}
+
+.avatar-sm {
+  @apply w-8 h-8 text-sm;
+}
+
+.avatar-md {
+  @apply w-12 h-12 text-lg;
+}
+
+.avatar-lg {
+  @apply w-16 h-16 text-2xl;
+}
+
+.avatar-xl {
+  @apply w-24 h-24 text-4xl;
+}
+
+.avatar-gradient {
+  @apply bg-gradient-to-br from-purple-400 to-pink-400;
+}
+
+/* ============================================
+   STATUS INDICATORS (NEW)
+   ============================================ */
+.status-online {
+  @apply w-3 h-3 bg-green-500 rounded-full border-2 border-white;
+}
+
+.status-offline {
+  @apply w-3 h-3 bg-gray-400 rounded-full border-2 border-white;
+}
+
+.status-away {
+  @apply w-3 h-3 bg-yellow-500 rounded-full border-2 border-white;
+}
+
+.status-busy {
+  @apply w-3 h-3 bg-red-500 rounded-full border-2 border-white;
+}
+
+/* ============================================
+   FLOATING ACTION BUTTON (NEW)
+   ============================================ */
+.fab {
+  @apply fixed bottom-24 right-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white p-4 rounded-full shadow-2xl hover:from-purple-700 hover:to-pink-700 transition-all duration-300 transform hover:scale-110 z-40;
+}
+
+/* ============================================
+   MODAL & OVERLAY (NEW)
+   ============================================ */
+.modal-overlay {
+  @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50;
+}
+
+.modal-content {
+  @apply bg-white rounded-2xl shadow-2xl max-w-md w-full transform transition-all;
+}
+
+/* ============================================
+   DIVIDER (NEW)
+   ============================================ */
+.divider {
+  @apply border-t border-gray-200 my-4;
+}
+
+.divider-gradient {
+  @apply h-px bg-gradient-to-r from-transparent via-purple-500 to-transparent my-4;
+}
+
+/* ============================================
+   SKELETON LOADING (NEW)
+   ============================================ */
+.skeleton {
+  @apply bg-gray-200 rounded animate-pulse;
+}
+
+.skeleton-text {
+  @apply h-4 bg-gray-200 rounded animate-pulse;
+}
+
+.skeleton-circle {
+  @apply rounded-full bg-gray-200 animate-pulse;
+}
+
+/* ============================================
+   NOTIFICATION BADGE (NEW)
+   ============================================ */
+.notification-badge {
+  @apply absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-[1.25rem] h-5 flex items-center justify-center px-1;
+}
+
+/* ============================================
+   HOVER EFFECTS (NEW)
+   ============================================ */
+.hover-lift {
+  @apply transition-transform duration-200 hover:-translate-y-1;
+}
+
+.hover-glow {
+  @apply transition-shadow duration-300 hover:shadow-2xl hover:shadow-purple-500/50;
+}
+
+/* ============================================
+   TEXT GRADIENTS (NEW)
+   ============================================ */
+.text-gradient-purple {
+  @apply bg-gradient-to-r from-purple-600 to-purple-400 bg-clip-text text-transparent;
+}
+
+.text-gradient-pink {
+  @apply bg-gradient-to-r from-pink-600 to-pink-400 bg-clip-text text-transparent;
+}
+
+.text-gradient-rainbow {
+  @apply bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 bg-clip-text text-transparent;
+}
+
+/* ============================================
+   RESPONSIVE UTILITIES
+   ============================================ */
+@media (max-width: 640px) {
+  .mobile-hide {
+    display: none;
+  }
+}
+
+@media (min-width: 641px) {
+  .mobile-only {
+    display: none;
+  }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+.focus-visible:focus {
+  @apply outline-none ring-2 ring-purple-500 ring-offset-2;
+}
+
+/* Skip to main content link */
+.skip-link {
+  @apply absolute left-0 top-0 bg-purple-600 text-white px-4 py-2 transform -translate-y-full focus:translate-y-0 transition-transform z-50;
+}
+
+/* ============================================
+   DARK MODE SUPPORT (Preparation)
+   ============================================ */
+@media (prefers-color-scheme: dark) {
+  /* Add dark mode styles here when needed */
+}
+
+/* ============================================
+   SELECTION COLOR
+   ============================================ */
+::selection {
+  background-color: rgba(147, 51, 234, 0.3);
+  color: inherit;
+}
+
+::-moz-selection {
+  background-color: rgba(147, 51, 234, 0.3);
+  color: inherit;
+}
+
+/* ============================================
+   DARK MODE STYLES
+   ============================================ */
+.dark {
+  color-scheme: dark;
+}
+
+/* Dark mode backgrounds */
+.dark body {
+  @apply bg-gray-900 text-gray-100;
+}
+
+.dark .bg-white {
+  @apply bg-gray-800;
+}
+
+.dark .bg-gray-50 {
+  @apply bg-gray-900;
+}
+
+.dark .bg-gray-100 {
+  @apply bg-gray-800;
+}
+
+/* Dark mode text */
+.dark .text-gray-900 {
+  @apply text-gray-100;
+}
+
+.dark .text-gray-800 {
+  @apply text-gray-200;
+}
+
+.dark .text-gray-700 {
+  @apply text-gray-300;
+}
+
+.dark .text-gray-600 {
+  @apply text-gray-400;
+}
+
+/* Dark mode borders */
+.dark .border-gray-200 {
+  @apply border-gray-700;
+}
+
+.dark .border-gray-300 {
+  @apply border-gray-600;
+}
+
+/* Dark mode hover states */
+.dark .hover\:bg-gray-50:hover {
+  @apply bg-gray-700;
+}
+
+.dark .hover\:bg-gray-100:hover {
+  @apply bg-gray-700;
+}
+
+/* Dark mode inputs */
+.dark input,
+.dark textarea,
+.dark select {
+  @apply bg-gray-700 border-gray-600 text-gray-100;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  @apply text-gray-400;
+}
+
+/* Dark mode cards */
+.dark .card {
+  @apply bg-gray-800 shadow-2xl;
+}
+
+/* Dark mode messages */
+.dark .message-received {
+  @apply bg-gray-700 text-gray-100 border-gray-600;
+}
+
+/* Dark mode scrollbar */
+.dark::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+.dark::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #9333ea, #ec4899);
+}
+
+/* PWA Install Component Animations */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Message highlight animation */
+.highlight-message {
+  animation: highlight 2s ease-in-out;
+}
+
+@keyframes highlight {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(139, 92, 246, 0.2);
+  }
+}
+
+
+.group:hover .reply-button,
+.reply-button:hover {
+  opacity: 1;
+}
+/* Reply button - always visible, clean design */
+.reply-button {
+  opacity: 0.7;
+  transition: all 0.2s ease-in-out;
+  background: rgba(75, 85, 99, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+.reply-button:hover {
+  opacity: 1;
+  background: rgba(75, 85, 99, 1);
+  transform: scale(1.1);
+}

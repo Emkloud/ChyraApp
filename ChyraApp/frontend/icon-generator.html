@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ChyraApp Icon Generator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      color: white;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      padding: 30px;
+      border-radius: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    h1 { margin-bottom: 10px; }
+    .subtitle { opacity: 0.9; margin-bottom: 30px; }
+    button {
+      background: white;
+      color: #764ba2;
+      border: none;
+      padding: 14px 28px;
+      margin: 5px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: transform 0.2s;
+    }
+    button:hover { transform: scale(1.05); }
+    .primary-btn {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+      font-size: 18px;
+      padding: 18px 36px;
+      margin: 20px 0;
+    }
+    #preview { 
+      margin: 30px 0;
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .canvas-container { 
+      text-align: center;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 15px;
+      border-radius: 10px;
+    }
+    canvas { 
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 12px;
+      display: block;
+      margin: 10px auto;
+    }
+    .size-label {
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 5px;
+    }
+    .instructions {
+      background: rgba(255, 255, 255, 0.15);
+      padding: 20px;
+      border-radius: 10px;
+      margin: 20px 0;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .instructions ol {
+      margin: 15px 0;
+      padding-left: 20px;
+    }
+    .instructions li {
+      margin: 8px 0;
+      line-height: 1.6;
+    }
+    .success {
+      background: rgba(16, 185, 129, 0.2);
+      padding: 15px;
+      border-radius: 10px;
+      margin: 20px 0;
+      border: 2px solid #10b981;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎨 ChyraApp Icon Generator</h1>
+    <p class="subtitle">Generate all PWA icons with one click!</p>
+    
+    <button class="primary-btn" onclick="downloadAll()">
+      ⬇️ Download All Icons (12 files)
+    </button>
+
+    <div class="instructions">
+      <strong>📋 Instructions:</strong>
+      <ol>
+        <li>Click the green button above to download all icons</li>
+        <li>Icons will download to your Downloads folder</li>
+        <li>Create folder: <code>frontend/public/icons/</code></li>
+        <li>Move all downloaded PNG files into that folder</li>
+        <li>Done! Your PWA icons are ready 🎉</li>
+      </ol>
+    </div>
+
+    <div id="success" class="success">
+      ✅ All icons downloaded! Check your Downloads folder.
+    </div>
+
+    <h3>Preview:</h3>
+    <div id="preview"></div>
+
+    <h3>Individual Downloads:</h3>
+    <div id="buttons"></div>
+  </div>
+
+  <script>
+    const sizes = [72, 96, 128, 144, 152, 192, 384, 512];
+    let downloadCount = 0;
+
+    function generateIcon(size, preview = false) {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      // Create gradient background
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#9333ea');
+      gradient.addColorStop(1, '#ec4899');
+      
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+
+      // Add rounded corners
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, size, size, size * 0.2);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Add chat bubble emoji
+      ctx.font = `bold ${size * 0.55}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('💬', size / 2, size / 2);
+
+      if (preview) {
+        const container = document.createElement('div');
+        container.className = 'canvas-container';
+        const displayCanvas = document.createElement('canvas');
+        displayCanvas.width = Math.min(size, 150);
+        displayCanvas.height = Math.min(size, 150);
+        const displayCtx = displayCanvas.getContext('2d');
+        displayCtx.drawImage(canvas, 0, 0, size, size, 0, 0, displayCanvas.width, displayCanvas.height);
+        
+        container.appendChild(displayCanvas);
+        const label = document.createElement('div');
+        label.className = 'size-label';
+        label.textContent = `${size}×${size}`;
+        container.appendChild(label);
+        document.getElementById('preview').appendChild(container);
+      }
+
+      return canvas;
+    }
+
+    function downloadIcon(size, filename = null) {
+      const canvas = generateIcon(size);
+      const link = document.createElement('a');
+      link.download = filename || `icon-${size}x${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      console.log(`✅ Downloaded: ${link.download}`);
+      downloadCount++;
+    }
+
+    function generateShortcutIcon(name, emoji) {
+      const canvas = document.createElement('canvas');
+      const size = 96;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      // Background
+      ctx.fillStyle = '#9333ea';
+      ctx.fillRect(0, 0, size, size);
+      
+      // Rounded corners
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, size, size, 20);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Emoji
+      ctx.font = 'bold 52px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(emoji, 48, 48);
+
+      const link = document.createElement('a');
+      link.download = `shortcut-${name}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      console.log(`✅ Downloaded: shortcut-${name}.png`);
+      downloadCount++;
+    }
+
+    function downloadAll() {
+      downloadCount = 0;
+      console.log('🎨 Starting icon generation...');
+      
+      // Download main icons
+      sizes.forEach((size, index) => {
+        setTimeout(() => downloadIcon(size), index * 200);
+      });
+      
+      // Download shortcut icons
+      const shortcuts = [
+        { name: 'chat', emoji: '💬' },
+        { name: 'group', emoji: '👥' },
+        { name: 'friends', emoji: '👋' },
+        { name: 'settings', emoji: '⚙️' }
+      ];
+
+      shortcuts.forEach((shortcut, index) => {
+        setTimeout(() => {
+          generateShortcutIcon(shortcut.name, shortcut.emoji);
+        }, (sizes.length + index) * 200);
+      });
+
+      // Show success message
+      setTimeout(() => {
+        document.getElementById('success').style.display = 'block';
+        console.log(`\n🎉 Generated ${downloadCount} icons successfully!`);
+      }, (sizes.length + shortcuts.length) * 200 + 500);
+    }
+
+    // Create individual download buttons
+    const buttonsDiv = document.getElementById('buttons');
+    sizes.forEach(size => {
+      const btn = document.createElement('button');
+      btn.textContent = `${size}×${size}`;
+      btn.onclick = () => downloadIcon(size);
+      buttonsDiv.appendChild(btn);
+    });
+
+    // Generate previews
+    [512, 192, 96].forEach(size => generateIcon(size, true));
+
+    console.log('✅ Icon generator ready!');
+    console.log('Click "Download All Icons" to get started.');
+  </script>
+</body>
+</html>
