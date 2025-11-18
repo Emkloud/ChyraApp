@@ -13,7 +13,7 @@ import ChatList from './pages/ChatList';
 import ChatWindow from './pages/ChatWindow';
 import Profile from './pages/Profile';
 import Settings from './pages/Settings';
-import Groups from './pages/Group';
+import Groups from './pages/Groups';  // ✅ FIXED: Was 'Group', should be 'Groups'
 import GroupChat from './pages/GroupChat';
 import AIChat from './pages/AIChat';
 import Calls from './pages/Calls';
@@ -81,8 +81,12 @@ function App() {
               {/* Protected Routes */}
               <Route path="/chats" element={<ProtectedRoute><ChatList /></ProtectedRoute>} />
               <Route path="/chat/:chatId" element={<ProtectedRoute><ChatWindow /></ProtectedRoute>} />
+              
+              {/* Groups Routes - Both /group and /groups supported */}
               <Route path="/groups" element={<ProtectedRoute><Groups /></ProtectedRoute>} />
+              <Route path="/groups/:groupId" element={<ProtectedRoute><GroupChat /></ProtectedRoute>} />
               <Route path="/group/:groupId" element={<ProtectedRoute><GroupChat /></ProtectedRoute>} />
+              
               <Route path="/ai" element={<ProtectedRoute><AIChat /></ProtectedRoute>} />
               <Route path="/calls" element={<ProtectedRoute><Calls /></ProtectedRoute>} />
               <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />

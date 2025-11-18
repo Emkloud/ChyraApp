@@ -14,7 +14,8 @@ router.post('/', protect, validateSendMessage, async (req, res) => {
     const { conversationId, content, type, media, mediaGroup, replyTo } = req.body;
 
     // Check if conversation exists and user is participant
-    const conversation = await Conversation.findById(conversationId);
+    const conversation = await Conversation.findById(conversationId)
+      .populate('participants.user', '_id username fullName profilePicture');
     
     if (!conversation) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -62,7 +63,7 @@ router.post('/', protect, validateSendMessage, async (req, res) => {
       await message.populate('replyTo');
     }
 
-    // Build payload once for both emit and response
+    // Build payload for emit and response
     const messageToEmit = {
       ...message.toObject(),
       chat: conversationId,
@@ -70,29 +71,57 @@ router.post('/', protect, validateSendMessage, async (req, res) => {
       _id: message._id.toString()
     };
 
-    // ✅ FIX 1: Mark as delivered to online participants
+    // ✅ CRITICAL FIX: Emit to ALL participants' personal rooms for instant delivery
     const io = req.app.get('io');
     if (io) {
-      // ✅ FIX 2: Emit to conversation room
+      // Get all participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      console.log('[MESSAGE] Emitting to participants:', participantIds);
+
+      // ✅ Emit to each participant's personal room (they join this on connection)
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:new', messageToEmit);
+        
+        // Also emit legacy event names for compatibility
+        io.to(`user:${participantId}`).emit('message:receive', messageToEmit);
+        io.to(`user:${participantId}`).emit('newMessage', messageToEmit);
+      });
+
+      // Also emit to conversation room for users who have joined it
+      io.to(`conversation:${conversationId}`).emit('message:new', messageToEmit);
       io.to(`conversation:${conversationId}`).emit('message:receive', messageToEmit);
 
-      // Mark as delivered for online users in the conversation
-      conversation.participants.forEach(participant => {
-        const userId = participant.user?.toString() || participant.toString();
-        if (userId !== req.user._id.toString()) {
-          // Check if user has any active socket connections
-          const userSockets = Array.from(io.sockets.sockets.values())
-            .filter(s => s.userId === userId);
-          
-          if (userSockets.length > 0 && !message.deliveredTo?.some(d => d.user?.toString() === userId)) {
-            message.markAsDelivered(userId);
+      // Mark as delivered for online users
+      participantIds.forEach(participantId => {
+        if (participantId !== req.user._id.toString()) {
+          // Check if user has active socket connections
+          const userRoom = io.sockets.adapter.rooms.get(`user:${participantId}`);
+          if (userRoom && userRoom.size > 0) {
+            if (!message.deliveredTo?.some(d => d.user?.toString() === participantId)) {
+              message.markAsDelivered(participantId);
+            }
           }
         }
       });
 
-      // Save delivery status if any were marked
+      // Save delivery status
       if (message.deliveredTo && message.deliveredTo.length > 0) {
         await message.save();
+        
+        // Emit delivery receipts
+        io.to(`user:${req.user._id}`).emit('message:delivered', {
+          messageId: message._id.toString(),
+          conversationId,
+          deliveredTo: message.deliveredTo
+        });
       }
     }
 
@@ -136,7 +165,7 @@ router.get('/:conversationId', protect, async (req, res) => {
       });
     }
 
-    // ✅ FIX 3: Build query - exclude deleted messages for this user
+    // Build query - exclude deleted messages for this user
     const query = {
       conversation: conversationId,
       'deletedBy.user': { $ne: req.user._id }
@@ -147,7 +176,7 @@ router.get('/:conversationId', protect, async (req, res) => {
       query._id = { $lt: cursor };
     }
 
-    // ✅ FIX 4: Get messages with proper population
+    // Get messages with proper population
     const messages = await Message.find(query)
       .populate('sender', 'username fullName profilePicture avatar')
       .populate('replyTo', 'content sender')
@@ -158,9 +187,9 @@ router.get('/:conversationId', protect, async (req, res) => {
 
     const count = await Message.countDocuments(query);
 
-    // ✅ FIX 5: Mark unread messages as read
+    // Mark unread messages as read
     const unreadMessages = messages.filter(msg => 
-      msg.sender?.toString() !== req.user._id.toString() && 
+      msg.sender?._id?.toString() !== req.user._id.toString() && 
       !msg.isReadBy(req.user._id)
     );
 
@@ -175,20 +204,39 @@ router.get('/:conversationId', protect, async (req, res) => {
         })
       );
 
-      // ✅ FIX 6: Emit read receipts via Socket.IO
+      // Emit read receipts via Socket.IO
       const io = req.app.get('io');
       if (io) {
+        // Get all participant IDs to notify them of read receipts
+        const participantIds = conversation.participants
+          .filter(p => p.isActive !== false)
+          .map(p => {
+            if (p.user && p.user._id) return p.user._id.toString();
+            if (p.user) return p.user.toString();
+            return null;
+          })
+          .filter(Boolean);
+
         unreadMessages.forEach(msg => {
-          io.to(`conversation:${conversationId}`).emit('message:read', {
+          const readReceipt = {
             messageId: msg._id.toString(),
             userId: req.user._id.toString(),
-            conversationId
+            conversationId,
+            readAt: Date.now()
+          };
+
+          // Emit to all participants' personal rooms
+          participantIds.forEach(participantId => {
+            io.to(`user:${participantId}`).emit('message:read', readReceipt);
           });
+
+          // Also emit to conversation room
+          io.to(`conversation:${conversationId}`).emit('message:read', readReceipt);
         });
       }
     }
 
-    // ✅ FIX 7: Return in chronological order (oldest first)
+    // Return in chronological order (oldest first)
     const orderedMessages = messages.reverse();
 
     res.status(HTTP_STATUS.OK).json({
@@ -238,14 +286,14 @@ router.put('/:messageId', protect, validateEditMessage, async (req, res) => {
     }
 
     // Check if message is deleted
-    if (message.isDeletedFor(req.user._id)) {
+    if (message.isDeletedFor && message.isDeletedFor(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
         message: 'Cannot edit deleted message'
       });
     }
 
-    // ✅ FIX 8: Edit message with proper content structure
+    // Edit message with proper content structure
     if (typeof content === 'string') {
       message.content = content;
     } else if (content && content.text) {
@@ -256,15 +304,38 @@ router.put('/:messageId', protect, validateEditMessage, async (req, res) => {
     message.editedAt = Date.now();
     await message.save();
 
-    // ✅ FIX 9: Emit update via Socket.IO
+    // Get conversation for participants
+    const conversation = await Conversation.findById(message.conversation);
+    
+    // Emit update via Socket.IO to all participants
     const io = req.app.get('io');
-    if (io) {
-      io.to(`conversation:${message.conversation}`).emit('message:edit', {
+    if (io && conversation) {
+      const editPayload = {
         messageId: message._id.toString(),
         content: message.content,
         isEdited: true,
-        editedAt: message.editedAt
+        editedAt: message.editedAt,
+        conversationId: message.conversation.toString()
+      };
+
+      // Get participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      // Emit to all participants' personal rooms
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:edit', editPayload);
+        io.to(`user:${participantId}`).emit('message:edited', editPayload);
       });
+
+      // Also emit to conversation room
+      io.to(`conversation:${message.conversation}`).emit('message:edit', editPayload);
     }
 
     await message.populate('sender', 'username fullName profilePicture avatar');
@@ -305,26 +376,49 @@ router.delete('/:messageId', protect, validateDeleteMessage, async (req, res) =>
     }
 
     // Check if user can delete
-    if (!message.canDelete(req.user._id, finalDeleteType)) {
+    if (message.canDelete && !message.canDelete(req.user._id, finalDeleteType)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
         message: ERROR_MESSAGES.CANNOT_DELETE
       });
     }
 
-    // ✅ FIX 10: Delete message properly
-    message.deleteFor(req.user._id, finalDeleteType);
+    // Delete message properly
+    if (message.deleteFor) {
+      message.deleteFor(req.user._id, finalDeleteType);
+    }
     await message.save();
 
-    // ✅ FIX 11: Emit delete via Socket.IO
+    // Emit delete via Socket.IO
     const io = req.app.get('io');
-    if (io) {
-      if (finalDeleteType === 'for_everyone') {
-        io.to(`conversation:${message.conversation}`).emit('message:delete', {
+    if (io && finalDeleteType === 'for_everyone') {
+      const conversation = await Conversation.findById(message.conversation);
+      
+      if (conversation) {
+        const deletePayload = {
           messageId: message._id.toString(),
           deleteType: finalDeleteType,
           conversationId: message.conversation.toString()
+        };
+
+        // Get participant IDs
+        const participantIds = conversation.participants
+          .filter(p => p.isActive !== false)
+          .map(p => {
+            if (p.user && p.user._id) return p.user._id.toString();
+            if (p.user) return p.user.toString();
+            return null;
+          })
+          .filter(Boolean);
+
+        // Emit to all participants' personal rooms
+        participantIds.forEach(participantId => {
+          io.to(`user:${participantId}`).emit('message:delete', deletePayload);
+          io.to(`user:${participantId}`).emit('message:deleted', deletePayload);
         });
+
+        // Also emit to conversation room
+        io.to(`conversation:${message.conversation}`).emit('message:delete', deletePayload);
       }
     }
 
@@ -343,7 +437,7 @@ router.delete('/:messageId', protect, validateDeleteMessage, async (req, res) =>
 });
 
 // @route   POST /api/messages/:messageId/reactions
-// @desc    Add reaction to a message (updated endpoint for frontend compatibility)
+// @desc    Add reaction to a message
 // @access  Private
 router.post('/:messageId/reactions', protect, async (req, res) => {
   try {
@@ -366,7 +460,7 @@ router.post('/:messageId/reactions', protect, async (req, res) => {
       });
     }
 
-    // ✅ FIX 12: Add or update reaction
+    // Add or update reaction
     const existingReaction = message.reactions?.find(
       r => (r.user?.toString() || r.user) === req.user._id.toString()
     );
@@ -374,27 +468,57 @@ router.post('/:messageId/reactions', protect, async (req, res) => {
     if (existingReaction) {
       if (existingReaction.emoji === emoji) {
         // Remove reaction if clicking same emoji
-        message.removeReaction(req.user._id);
+        if (message.removeReaction) {
+          message.removeReaction(req.user._id);
+        }
       } else {
         // Update to new emoji
         existingReaction.emoji = emoji;
       }
     } else {
       // Add new reaction
-      message.addReaction(req.user._id, emoji);
+      if (message.addReaction) {
+        message.addReaction(req.user._id, emoji);
+      } else {
+        if (!message.reactions) message.reactions = [];
+        message.reactions.push({ user: req.user._id, emoji });
+      }
     }
 
     await message.save();
 
-    // ✅ FIX 13: Emit reaction via Socket.IO (FIXED: message:reaction_added instead of message:react)
+    // Get conversation for participants
+    const conversation = await Conversation.findById(message.conversation);
+
+    // Emit reaction via Socket.IO to all participants
     const io = req.app.get('io');
-    if (io) {
-      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', {
+    if (io && conversation) {
+      const reactionPayload = {
         messageId: message._id.toString(),
         userId: req.user._id.toString(),
         emoji: emoji,
-        reactions: message.reactions
+        reactions: message.reactions,
+        conversationId: message.conversation.toString()
+      };
+
+      // Get participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      // Emit to all participants' personal rooms
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:reaction_added', reactionPayload);
+        io.to(`user:${participantId}`).emit('message:react', reactionPayload);
       });
+
+      // Also emit to conversation room
+      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', reactionPayload);
     }
 
     res.status(HTTP_STATUS.OK).json({
@@ -430,17 +554,44 @@ router.post('/:messageId/react', protect, validateReactToMessage, async (req, re
     }
 
     // Add reaction
-    message.addReaction(req.user._id, emoji);
+    if (message.addReaction) {
+      message.addReaction(req.user._id, emoji);
+    } else {
+      if (!message.reactions) message.reactions = [];
+      message.reactions.push({ user: req.user._id, emoji });
+    }
     await message.save();
 
-    // Emit reaction via Socket.IO (FIXED: message:reaction_added)
+    // Get conversation for participants
+    const conversation = await Conversation.findById(message.conversation);
+
+    // Emit reaction via Socket.IO
     const io = req.app.get('io');
-    if (io) {
-      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', {
+    if (io && conversation) {
+      const reactionPayload = {
         messageId: message._id.toString(),
         userId: req.user._id.toString(),
-        emoji: emoji
+        emoji: emoji,
+        conversationId: message.conversation.toString()
+      };
+
+      // Get participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      // Emit to all participants' personal rooms
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:reaction_added', reactionPayload);
       });
+
+      // Also emit to conversation room
+      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', reactionPayload);
     }
 
     res.status(HTTP_STATUS.OK).json({
@@ -458,7 +609,7 @@ router.post('/:messageId/react', protect, validateReactToMessage, async (req, re
   }
 });
 
-// @route   DELETE /api/messages/:messageId/reactions (frontend compatibility)
+// @route   DELETE /api/messages/:messageId/reactions
 // @desc    Remove reaction from a message
 // @access  Private
 router.delete('/:messageId/reactions', protect, async (req, res) => {
@@ -475,17 +626,46 @@ router.delete('/:messageId/reactions', protect, async (req, res) => {
     }
 
     // Remove reaction
-    message.removeReaction(req.user._id);
+    if (message.removeReaction) {
+      message.removeReaction(req.user._id);
+    } else {
+      message.reactions = message.reactions?.filter(
+        r => (r.user?.toString() || r.user) !== req.user._id.toString()
+      ) || [];
+    }
     await message.save();
 
-    // Emit reaction removal via Socket.IO (FIXED: message:reaction_added with null emoji)
+    // Get conversation for participants
+    const conversation = await Conversation.findById(message.conversation);
+
+    // Emit reaction removal via Socket.IO
     const io = req.app.get('io');
-    if (io) {
-      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', {
+    if (io && conversation) {
+      const reactionPayload = {
         messageId: message._id.toString(),
         userId: req.user._id.toString(),
-        emoji: null
+        emoji: null,
+        reactions: message.reactions,
+        conversationId: message.conversation.toString()
+      };
+
+      // Get participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      // Emit to all participants' personal rooms
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:reaction_added', reactionPayload);
       });
+
+      // Also emit to conversation room
+      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', reactionPayload);
     }
 
     res.status(HTTP_STATUS.OK).json({
@@ -519,17 +699,45 @@ router.delete('/:messageId/react', protect, async (req, res) => {
     }
 
     // Remove reaction
-    message.removeReaction(req.user._id);
+    if (message.removeReaction) {
+      message.removeReaction(req.user._id);
+    } else {
+      message.reactions = message.reactions?.filter(
+        r => (r.user?.toString() || r.user) !== req.user._id.toString()
+      ) || [];
+    }
     await message.save();
 
-    // Emit reaction removal via Socket.IO (FIXED: message:reaction_added with null emoji)
+    // Get conversation for participants
+    const conversation = await Conversation.findById(message.conversation);
+
+    // Emit reaction removal via Socket.IO
     const io = req.app.get('io');
-    if (io) {
-      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', {
+    if (io && conversation) {
+      const reactionPayload = {
         messageId: message._id.toString(),
         userId: req.user._id.toString(),
-        emoji: null
+        emoji: null,
+        conversationId: message.conversation.toString()
+      };
+
+      // Get participant IDs
+      const participantIds = conversation.participants
+        .filter(p => p.isActive !== false)
+        .map(p => {
+          if (p.user && p.user._id) return p.user._id.toString();
+          if (p.user) return p.user.toString();
+          return null;
+        })
+        .filter(Boolean);
+
+      // Emit to all participants' personal rooms
+      participantIds.forEach(participantId => {
+        io.to(`user:${participantId}`).emit('message:reaction_added', reactionPayload);
       });
+
+      // Also emit to conversation room
+      io.to(`conversation:${message.conversation}`).emit('message:reaction_added', reactionPayload);
     }
 
     res.status(HTTP_STATUS.OK).json({

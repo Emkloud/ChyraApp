@@ -9,12 +9,17 @@ exports.getUserGroups = async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
 
-    console.log('[GROUP] Getting groups for user:', userId);
+    console.log('[GROUP] Getting groups for user:', userId.toString());
 
+    // ✅ FIX: More explicit query to ensure only member's groups are returned
     const groups = await Conversation.find({
       isGroup: true,
-      'participants.user': userId,
-      'participants.isActive': true
+      participants: {
+        $elemMatch: {
+          user: userId,
+          isActive: { $ne: false }
+        }
+      }
     })
       .populate('participants.user', 'username fullName profilePicture email')
       .populate('createdBy', 'username fullName profilePicture')
@@ -26,6 +31,11 @@ exports.getUserGroups = async (req, res) => {
       .sort({ lastMessageAt: -1 });
 
     console.log('[GROUP] Found groups:', groups.length);
+    
+    // Debug: Log group names and member counts
+    groups.forEach(g => {
+      console.log(`[GROUP] - ${g.name}: ${g.participants?.length || 0} members`);
+    });
 
     res.json({
       success: true,
@@ -49,7 +59,7 @@ exports.createGroup = async (req, res) => {
     const { name, description, memberIds, groupPicture, avatar } = req.body;
     const creatorId = req.user.id || req.user._id;
 
-    console.log('[GROUP] Creating group:', { name, memberIds: memberIds?.length, creatorId });
+    console.log('[GROUP] Creating group:', { name, memberIds: memberIds?.length, creatorId: creatorId.toString() });
 
     if (!name || !name.trim()) {
       return res.status(400).json({
@@ -58,7 +68,7 @@ exports.createGroup = async (req, res) => {
       });
     }
 
-    // Allow creating group with just the creator
+    // ✅ Only add members that are explicitly provided - creator only by default
     const memberIdsArray = memberIds || [];
 
     // Verify all members exist if any provided
@@ -72,7 +82,7 @@ exports.createGroup = async (req, res) => {
       }
     }
 
-    // Create participants array (creator as admin + members)
+    // Create participants array (creator as admin + explicitly added members only)
     const participants = [
       {
         user: creatorId,
@@ -89,6 +99,8 @@ exports.createGroup = async (req, res) => {
           isActive: true
         }))
     ];
+
+    console.log('[GROUP] Creating with participants:', participants.length);
 
     // Create group conversation
     const group = await Conversation.create({
@@ -111,13 +123,14 @@ exports.createGroup = async (req, res) => {
       .populate('participants.user', 'username fullName profilePicture email')
       .populate('createdBy', 'username fullName profilePicture');
 
-    console.log('[GROUP] Group created:', populatedGroup._id);
+    console.log('[GROUP] Group created:', populatedGroup._id, 'with', populatedGroup.participants.length, 'members');
 
-    // Emit socket event to all members
+    // Emit socket event ONLY to added members
     const io = req.app.get('io');
     if (io) {
       participants.forEach(p => {
-        io.to(`user:${p.user}`).emit('group:created', populatedGroup);
+        const participantId = p.user._id || p.user;
+        io.to(`user:${participantId}`).emit('group:created', populatedGroup);
       });
     }
 
@@ -143,7 +156,7 @@ exports.getGroupById = async (req, res) => {
     const userId = req.user.id || req.user._id;
     const groupId = req.params.id;
 
-    console.log('[GROUP] Getting group:', groupId);
+    console.log('[GROUP] Getting group:', groupId, 'for user:', userId.toString());
 
     const group = await Conversation.findById(groupId)
       .populate('participants.user', 'username fullName profilePicture email lastSeen')
@@ -164,7 +177,17 @@ exports.getGroupById = async (req, res) => {
       });
     }
 
-    if (!group.isMember(userId)) {
+    // ✅ STRICT ACCESS CHECK: Verify user is actually a member
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && 
+             participantId.toString() === userId.toString() && 
+             p.isActive !== false;
+    });
+
+    console.log('[GROUP] User is member:', isMember);
+
+    if (!isMember) {
       return res.status(403).json({
         success: false,
         message: 'You are not a member of this group'
@@ -205,14 +228,25 @@ exports.updateGroup = async (req, res) => {
       });
     }
 
-    if (!group.isMember(userId)) {
+    // ✅ STRICT CHECK
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
       return res.status(403).json({
         success: false,
         message: 'You are not a member of this group'
       });
     }
 
-    if (!group.isAdmin(userId)) {
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only admins can update group info'
@@ -236,8 +270,8 @@ exports.updateGroup = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -276,8 +310,8 @@ exports.deleteGroup = async (req, res) => {
       });
     }
 
-    const creatorId = group.createdBy._id || group.createdBy;
-    if (creatorId.toString() !== userId.toString()) {
+    const creatorId = group.createdBy?._id || group.createdBy;
+    if (!creatorId || creatorId.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Only the creator can delete the group'
@@ -295,7 +329,7 @@ exports.deleteGroup = async (req, res) => {
     // If this is a subgroup, remove from parent's subgroups array
     if (group.isSubgroup && group.parentGroup) {
       const parentGroup = await Conversation.findById(group.parentGroup);
-      if (parentGroup) {
+      if (parentGroup && parentGroup.removeSubgroup) {
         parentGroup.removeSubgroup(groupId);
         await parentGroup.save();
       }
@@ -313,8 +347,10 @@ exports.deleteGroup = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        const participantId = p.user._id || p.user;
-        io.to(`user:${participantId}`).emit('group:deleted', { groupId });
+        const participantId = p.user?._id || p.user;
+        if (participantId) {
+          io.to(`user:${participantId}`).emit('group:deleted', { groupId });
+        }
       });
     }
 
@@ -359,7 +395,13 @@ exports.addMembers = async (req, res) => {
       });
     }
 
-    if (!group.isMember(userId)) {
+    // ✅ STRICT CHECK
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
       return res.status(403).json({
         success: false,
         message: 'You are not a member of this group'
@@ -367,11 +409,18 @@ exports.addMembers = async (req, res) => {
     }
 
     // Check if only admins can add members
-    if (group.settings.onlyAdminsCanAddMembers && !group.isAdmin(userId)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admins can add members'
+    if (group.settings?.onlyAdminsCanAddMembers) {
+      const isAdmin = group.participants.some(p => {
+        const participantId = p.user?._id || p.user;
+        return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
       });
+      
+      if (!isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only admins can add members'
+        });
+      }
     }
 
     // Verify all members exist
@@ -385,7 +434,25 @@ exports.addMembers = async (req, res) => {
 
     // Add members
     memberIds.forEach(memberId => {
-      group.addMember(memberId, userId);
+      // Check if already a member
+      const existingMember = group.participants.find(p => {
+        const participantId = p.user?._id || p.user;
+        return participantId && participantId.toString() === memberId.toString();
+      });
+
+      if (existingMember) {
+        // Reactivate if inactive
+        existingMember.isActive = true;
+      } else {
+        // Add new member
+        group.participants.push({
+          user: memberId,
+          role: 'member',
+          joinedAt: new Date(),
+          isActive: true,
+          addedBy: userId
+        });
+      }
     });
 
     await group.save();
@@ -394,18 +461,20 @@ exports.addMembers = async (req, res) => {
       .populate('participants.user', 'username fullName profilePicture email')
       .populate('createdBy', 'username fullName profilePicture');
 
-    console.log('[GROUP] Members added to group:', groupId);
+    console.log('[GROUP] Members added to group:', groupId, '- New total:', updatedGroup.participants.length);
 
     // Emit socket events
     const io = req.app.get('io');
     if (io) {
+      // Notify new members they've been added
       memberIds.forEach(memberId => {
         io.to(`user:${memberId}`).emit('group:added', updatedGroup);
       });
 
+      // Notify existing members of update
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -447,7 +516,10 @@ exports.removeMember = async (req, res) => {
 
     // Can remove yourself or admin can remove others
     const isSelf = userId.toString() === memberId.toString();
-    const isAdmin = group.isAdmin(userId);
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
 
     if (!isSelf && !isAdmin) {
       return res.status(403).json({
@@ -457,15 +529,25 @@ exports.removeMember = async (req, res) => {
     }
 
     // Cannot remove the creator
-    const creatorId = group.createdBy._id || group.createdBy;
-    if (creatorId.toString() === memberId.toString()) {
+    const creatorId = group.createdBy?._id || group.createdBy;
+    if (creatorId && creatorId.toString() === memberId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Cannot remove the group creator'
       });
     }
 
-    group.removeMember(memberId);
+    // Find and deactivate member
+    const memberIndex = group.participants.findIndex(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === memberId.toString();
+    });
+
+    if (memberIndex !== -1) {
+      group.participants[memberIndex].isActive = false;
+      group.participants[memberIndex].leftAt = new Date();
+    }
+
     await group.save();
 
     const updatedGroup = await Conversation.findById(groupId)
@@ -480,8 +562,8 @@ exports.removeMember = async (req, res) => {
       io.to(`user:${memberId}`).emit('group:removed', { groupId });
 
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -521,21 +603,32 @@ exports.makeAdmin = async (req, res) => {
       });
     }
 
-    if (!group.isAdmin(userId)) {
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only admins can promote members'
       });
     }
 
-    if (!group.isMember(memberId)) {
+    // Find member and promote
+    const memberIndex = group.participants.findIndex(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === memberId.toString() && p.isActive !== false;
+    });
+
+    if (memberIndex === -1) {
       return res.status(404).json({
         success: false,
         message: 'User is not a member of this group'
       });
     }
 
-    group.makeAdmin(memberId);
+    group.participants[memberIndex].role = 'admin';
     await group.save();
 
     const updatedGroup = await Conversation.findById(groupId)
@@ -548,8 +641,8 @@ exports.makeAdmin = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -589,7 +682,12 @@ exports.removeAdmin = async (req, res) => {
       });
     }
 
-    if (!group.isAdmin(userId)) {
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only admins can demote members'
@@ -597,15 +695,24 @@ exports.removeAdmin = async (req, res) => {
     }
 
     // Cannot demote the creator
-    const creatorId = group.createdBy._id || group.createdBy;
-    if (creatorId.toString() === memberId.toString()) {
+    const creatorId = group.createdBy?._id || group.createdBy;
+    if (creatorId && creatorId.toString() === memberId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Cannot demote the group creator'
       });
     }
 
-    group.removeAdmin(memberId);
+    // Find member and demote
+    const memberIndex = group.participants.findIndex(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === memberId.toString();
+    });
+
+    if (memberIndex !== -1) {
+      group.participants[memberIndex].role = 'member';
+    }
+
     await group.save();
 
     const updatedGroup = await Conversation.findById(groupId)
@@ -618,8 +725,8 @@ exports.removeAdmin = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -659,11 +766,20 @@ exports.updateSettings = async (req, res) => {
       });
     }
 
-    if (!group.isAdmin(userId)) {
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only admins can update settings'
       });
+    }
+
+    if (!group.settings) {
+      group.settings = {};
     }
 
     if (onlyAdminsCanMessage !== undefined) {
@@ -685,8 +801,8 @@ exports.updateSettings = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('group:updated', updatedGroup);
         }
       });
@@ -726,7 +842,13 @@ exports.deleteMessage = async (req, res) => {
       });
     }
 
-    if (!group.isMember(userId)) {
+    // ✅ STRICT CHECK
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
       return res.status(403).json({
         success: false,
         message: 'You are not a member of this group'
@@ -743,9 +865,12 @@ exports.deleteMessage = async (req, res) => {
     }
 
     // Only admin or message sender can delete
-    const isAdmin = group.isAdmin(userId);
-    const senderId = message.sender._id || message.sender;
-    const isSender = senderId.toString() === userId.toString();
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+    const senderId = message.sender?._id || message.sender;
+    const isSender = senderId && senderId.toString() === userId.toString();
 
     if (!isAdmin && !isSender) {
       return res.status(403).json({
@@ -762,8 +887,8 @@ exports.deleteMessage = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       group.participants.forEach(p => {
-        if (p.isActive) {
-          const participantId = p.user._id || p.user;
+        if (p.isActive !== false) {
+          const participantId = p.user?._id || p.user;
           io.to(`user:${participantId}`).emit('message:deleted', {
             conversationId: groupId,
             messageId,
@@ -800,7 +925,6 @@ exports.createSubgroup = async (req, res) => {
 
     console.log('[SUBGROUP] Creating subgroup:', { groupId, name, memberIds: memberIds?.length });
 
-    // Get parent group
     const parentGroup = await Conversation.findById(groupId);
 
     if (!parentGroup) {
@@ -810,15 +934,18 @@ exports.createSubgroup = async (req, res) => {
       });
     }
 
-    // Check if user is admin of parent group
-    if (!parentGroup.isAdmin(userId)) {
+    const isAdmin = parentGroup.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only parent group admins can create subgroups'
       });
     }
 
-    // Prevent creating subgroups of subgroups
     if (parentGroup.isSubgroup) {
       return res.status(400).json({
         success: false,
@@ -826,7 +953,6 @@ exports.createSubgroup = async (req, res) => {
       });
     }
 
-    // Validate name
     if (!name || !name.trim()) {
       return res.status(400).json({
         success: false,
@@ -834,7 +960,6 @@ exports.createSubgroup = async (req, res) => {
       });
     }
 
-    // Validate members (must be subset of parent group members)
     if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {
       return res.status(400).json({
         success: false,
@@ -844,8 +969,8 @@ exports.createSubgroup = async (req, res) => {
 
     // Verify all members are in parent group
     const parentMemberIds = parentGroup.participants
-      .filter(p => p.isActive)
-      .map(p => (p.user._id || p.user).toString());
+      .filter(p => p.isActive !== false)
+      .map(p => (p.user?._id || p.user).toString());
 
     const invalidMembers = memberIds.filter(id => !parentMemberIds.includes(id.toString()));
 
@@ -856,7 +981,6 @@ exports.createSubgroup = async (req, res) => {
       });
     }
 
-    // Create participants array (creator as admin + selected members)
     const participants = [
       {
         user: userId,
@@ -874,7 +998,6 @@ exports.createSubgroup = async (req, res) => {
         }))
     ];
 
-    // Create subgroup
     const subgroup = await Conversation.create({
       name: name.trim(),
       description: description?.trim() || '',
@@ -891,11 +1014,12 @@ exports.createSubgroup = async (req, res) => {
       lastMessageAt: new Date()
     });
 
-    // Add subgroup to parent's subgroups array
-    parentGroup.addSubgroup(subgroup._id);
+    if (!parentGroup.subgroups) {
+      parentGroup.subgroups = [];
+    }
+    parentGroup.subgroups.push(subgroup._id);
     await parentGroup.save();
 
-    // Populate the subgroup
     const populatedSubgroup = await Conversation.findById(subgroup._id)
       .populate('participants.user', 'username fullName profilePicture email')
       .populate('createdBy', 'username fullName profilePicture')
@@ -903,11 +1027,11 @@ exports.createSubgroup = async (req, res) => {
 
     console.log('[SUBGROUP] Subgroup created:', populatedSubgroup._id);
 
-    // Emit socket event to all members
     const io = req.app.get('io');
     if (io) {
       participants.forEach(p => {
-        io.to(`user:${p.user}`).emit('subgroup:created', {
+        const participantId = p.user._id || p.user;
+        io.to(`user:${participantId}`).emit('subgroup:created', {
           subgroup: populatedSubgroup,
           parentGroup: parentGroup
         });
@@ -938,7 +1062,6 @@ exports.getSubgroups = async (req, res) => {
 
     console.log('[SUBGROUP] Getting subgroups:', groupId);
 
-    // Verify user is member of parent group
     const parentGroup = await Conversation.findById(groupId);
 
     if (!parentGroup) {
@@ -948,19 +1071,27 @@ exports.getSubgroups = async (req, res) => {
       });
     }
 
-    if (!parentGroup.isMember(userId)) {
+    const isMember = parentGroup.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
       return res.status(403).json({
         success: false,
         message: 'You are not a member of this group'
       });
     }
 
-    // Get all subgroups
     const subgroups = await Conversation.find({
-      _id: { $in: parentGroup.subgroups },
+      _id: { $in: parentGroup.subgroups || [] },
       isSubgroup: true,
-      'participants.user': userId,
-      'participants.isActive': true
+      participants: {
+        $elemMatch: {
+          user: userId,
+          isActive: { $ne: false }
+        }
+      }
     })
       .populate('participants.user', 'username fullName profilePicture')
       .populate('createdBy', 'username fullName profilePicture')
@@ -996,7 +1127,6 @@ exports.deleteSubgroup = async (req, res) => {
 
     console.log('[SUBGROUP] Deleting subgroup:', { groupId, subgroupId });
 
-    // Get parent group
     const parentGroup = await Conversation.findById(groupId);
 
     if (!parentGroup) {
@@ -1006,15 +1136,18 @@ exports.deleteSubgroup = async (req, res) => {
       });
     }
 
-    // Check if user is admin of parent group
-    if (!parentGroup.isAdmin(userId)) {
+    const isAdmin = parentGroup.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    if (!isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only parent group admins can delete subgroups'
       });
     }
 
-    // Get subgroup
     const subgroup = await Conversation.findById(subgroupId);
 
     if (!subgroup) {
@@ -1024,7 +1157,6 @@ exports.deleteSubgroup = async (req, res) => {
       });
     }
 
-    // Verify it's a subgroup of this parent
     if (subgroup.parentGroup?.toString() !== groupId) {
       return res.status(400).json({
         success: false,
@@ -1033,26 +1165,26 @@ exports.deleteSubgroup = async (req, res) => {
     }
 
     // Remove from parent's subgroups array
-    parentGroup.removeSubgroup(subgroupId);
+    parentGroup.subgroups = (parentGroup.subgroups || []).filter(
+      id => id.toString() !== subgroupId
+    );
     await parentGroup.save();
 
-    // Delete the subgroup
     await Conversation.findByIdAndDelete(subgroupId);
-
-    // Delete all messages in the subgroup
     await Message.deleteMany({ conversation: subgroupId });
 
     console.log('[SUBGROUP] Subgroup deleted:', subgroupId);
 
-    // Emit socket event
     const io = req.app.get('io');
     if (io) {
       subgroup.participants.forEach(p => {
-        const participantId = p.user._id || p.user;
-        io.to(`user:${participantId}`).emit('subgroup:deleted', {
-          subgroupId,
-          parentGroupId: groupId
-        });
+        const participantId = p.user?._id || p.user;
+        if (participantId) {
+          io.to(`user:${participantId}`).emit('subgroup:deleted', {
+            subgroupId,
+            parentGroupId: groupId
+          });
+        }
       });
     }
 
