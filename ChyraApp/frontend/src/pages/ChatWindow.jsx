@@ -6,18 +6,20 @@ import { useSocket } from '../context/SocketContext';
 import { chatService } from '../services/chatService';
 import { messageService } from '../services/messageService';
 import { uploadService } from '../services/uploadService';
-import groupService from '../services/groupService';  // ✅ FIXED: Default import instead of named import
+import groupService from '../services/groupService';
 import MessageActions from '../components/MessageActions';
 import MessageAttachment from '../components/MessageAttachment';
 import MessageReactionBubble from '../components/MessageReactionsBubble';
 import ReactionPicker from '../components/ReactionPicker';
+import GroupInfoModal from '../components/GroupInfoModal';
+import AddMembersModal from '../components/AddMembersModal';
 
 export default function ChatWindow() {
   const { chatId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { socket, isConnected, onlineUsers } = useSocket();
-  
+
   const [chat, setChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
@@ -30,12 +32,15 @@ export default function ChatWindow() {
   const [replyingTo, setReplyingTo] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(null);
-  
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showAddMembers, setShowAddMembers] = useState(false);
+
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [reactionPickerMessage, setReactionPickerMessage] = useState(null);
   const [reactionPickerPosition, setReactionPickerPosition] = useState(null);
-  
+
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const messageIdsRef = useRef(new Set());
@@ -53,22 +58,25 @@ export default function ChatWindow() {
     const participantUserId = p?.user?._id || p?.user?.id;
     return participantUserId && participantUserId !== currentUserId;
   })?.user : null;
-  
+
   const otherUserId = otherUser?._id || otherUser?.id;
   const isOtherUserOnline = otherUser && Array.isArray(onlineUsers) && onlineUsers.includes(otherUserId);
 
   // Check if current user is admin in group
   const isAdmin = isGroup && chat?.participants?.some(p => {
-    const participantId = p.user?._id || p.user;
-    return participantId?.toString() === currentUserId?.toString() && p.role === 'admin';
+    const participantId = p.user?._id || p.user?.id || p.user;
+    return participantId?.toString() === currentUserId?.toString() && p.role === 'admin' && p.isActive;
   });
+
+  // Check if current user is creator
+  const isCreator = isGroup && (chat?.createdBy?._id || chat?.createdBy)?.toString() === currentUserId?.toString();
 
   const QUICK_REACTIONS = ['❤️', '😂', '😮', '😢', '🙏', '👍'];
 
   const handleLongPressStart = (e, message) => {
     e.preventDefault();
     const touch = e.touches ? e.touches[0] : e;
-    
+
     longPressTimer.current = setTimeout(() => {
       setReactionPickerMessage(message);
       setReactionPickerPosition({
@@ -107,7 +115,7 @@ export default function ChatWindow() {
       console.log('Adding reaction:', { messageId, emoji });
       const response = await messageService.addReaction(messageId, emoji);
       console.log('Reaction API response:', response);
-      
+
       if (response?.data?.reactions) {
         setMessages(prev => prev.map(msg => {
           if (msg._id === messageId) {
@@ -117,7 +125,7 @@ export default function ChatWindow() {
           return msg;
         }));
       }
-      
+
       setShowReactionPicker(false);
       setReactionPickerMessage(null);
       setContextMenu(null);
@@ -137,14 +145,12 @@ export default function ChatWindow() {
   const handleDeleteMessage = async (messageId) => {
     if (confirm('Delete this message?')) {
       try {
-        // Use group message delete for groups
         if (isGroup) {
           await groupService.deleteMessage(chatId, messageId);
         } else {
           await messageService.deleteMessage(messageId, false);
         }
-        
-        // Remove message from local state
+
         setMessages(prev => prev.filter(m => m._id !== messageId));
         setContextMenu(null);
       } catch (error) {
@@ -202,21 +208,21 @@ export default function ChatWindow() {
     if (status === 'read') {
       return (
         <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
-          <path d="M12.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-1-1a1 1 0 011.414-1.414l.293.293 7.293-7.293a1 1 0 011.414 0z"/>
+          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
+          <path d="M12.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-1-1a1 1 0 011.414-1.414l.293.293 7.293-7.293a1 1 0 011.414 0z" />
         </svg>
       );
     } else if (status === 'delivered') {
       return (
         <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
-          <path d="M12.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-1-1a1 1 0 011.414-1.414l.293.293 7.293-7.293a1 1 0 011.414 0z"/>
+          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
+          <path d="M12.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-1-1a1 1 0 011.414-1.414l.293.293 7.293-7.293a1 1 0 011.414 0z" />
         </svg>
       );
     } else {
       return (
         <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
+          <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
         </svg>
       );
     }
@@ -237,29 +243,29 @@ export default function ChatWindow() {
     } else if (messageDate.getTime() === yesterday.getTime()) {
       return 'Yesterday';
     } else {
-      return messageDate.toLocaleDateString('en-US', { 
-        month: 'long', 
-        day: 'numeric', 
-        year: messageDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined 
+      return messageDate.toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: messageDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
       });
     }
   };
 
   const shouldShowDateSeparator = (currentMsg, previousMsg) => {
     if (!previousMsg) return true;
-    
+
     const currentDate = new Date(currentMsg.createdAt);
     const previousDate = new Date(previousMsg.createdAt);
-    
+
     currentDate.setHours(0, 0, 0, 0);
     previousDate.setHours(0, 0, 0, 0);
-    
+
     return currentDate.getTime() !== previousDate.getTime();
   };
 
   const formatLastSeen = (lastSeenDate) => {
     if (!lastSeenDate) return 'Offline';
-    
+
     const lastSeen = new Date(lastSeenDate);
     const now = new Date();
     const diffMs = now - lastSeen;
@@ -271,14 +277,13 @@ export default function ChatWindow() {
     if (diffMins < 60) return `${diffMins} min ago`;
     if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
     if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-    
+
     return lastSeen.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  // Get sender info for group messages
   const getSenderInfo = (message) => {
     const senderId = message.sender?._id || message.sender;
-    
+
     if (senderId === currentUserId) {
       return { name: 'You', fullName: user?.fullName || user?.username };
     }
@@ -288,7 +293,7 @@ export default function ChatWindow() {
         const pId = p.user?._id || p.user;
         return pId?.toString() === senderId?.toString();
       })?.user;
-      
+
       return {
         name: sender?.username || sender?.fullName || 'Unknown',
         fullName: sender?.fullName || sender?.username || 'Unknown'
@@ -306,22 +311,20 @@ export default function ChatWindow() {
       try {
         setLoading(true);
 
-        // Load group or chat data
-        const chatData = isGroup ? 
-          await groupService.getGroupById(chatId) : 
+        const chatData = isGroup ?
+          await groupService.getGroupById(chatId) :
           await chatService.getChatById(chatId);
-        
+
         setChat(chatData);
 
-        // Load messages (works for both groups and 1-on-1)
         const messagesData = await messageService.getMessages(chatId);
-        
+
         const validMessages = (
-          Array.isArray(messagesData) 
-            ? messagesData 
+          Array.isArray(messagesData)
+            ? messagesData
             : (messagesData?.data?.messages || messagesData?.messages || [])
         ).filter(msg => msg && msg._id);
-        
+
         setMessages(validMessages);
         messageIdsRef.current = new Set(validMessages.map(m => m._id));
         prevMessagesLengthRef.current = validMessages.length;
@@ -382,14 +385,14 @@ export default function ChatWindow() {
 
     const handleMessageDelivered = (data) => {
       const { messageId, userId } = data;
-      
+
       setMessages(prev => prev.map(msg => {
         if (msg._id === messageId) {
           const deliveredTo = msg.deliveredTo || [];
           if (!deliveredTo.some(d => (d?.user?._id || d?.user || d) === userId)) {
-            return { 
-              ...msg, 
-              deliveredTo: [...deliveredTo, { user: userId, deliveredAt: Date.now() }] 
+            return {
+              ...msg,
+              deliveredTo: [...deliveredTo, { user: userId, deliveredAt: Date.now() }]
             };
           }
         }
@@ -399,14 +402,14 @@ export default function ChatWindow() {
 
     const handleMessageRead = (data) => {
       const { messageId, userId } = data;
-      
+
       setMessages(prev => prev.map(msg => {
         if (msg._id === messageId) {
           const readBy = msg.readBy || [];
           if (!readBy.some(r => (r?.user?._id || r?.user || r) === userId)) {
-            return { 
-              ...msg, 
-              readBy: [...readBy, { user: userId, readAt: Date.now() }] 
+            return {
+              ...msg,
+              readBy: [...readBy, { user: userId, readAt: Date.now() }]
             };
           }
         }
@@ -443,7 +446,6 @@ export default function ChatWindow() {
       });
     };
 
-    // Handle message deletion
     const handleMessageDeleted = (data) => {
       console.log('🗑️ Message deleted:', data);
       if (data.conversationId === chatId) {
@@ -451,7 +453,6 @@ export default function ChatWindow() {
       }
     };
 
-    // Handle group updates
     const handleGroupUpdated = (updatedGroup) => {
       if (updatedGroup._id === chatId) {
         setChat(updatedGroup);
@@ -509,7 +510,7 @@ export default function ChatWindow() {
 
   const sendMessage = async (e) => {
     e?.preventDefault();
-    
+
     const messageContent = newMessage.trim();
     if ((!messageContent && attachments.length === 0) || sending) {
       return;
@@ -517,7 +518,7 @@ export default function ChatWindow() {
 
     try {
       setSending(true);
-      
+
       const conversationIdString = typeof chatId === 'string' ? chatId : String(chatId);
 
       let messageData;
@@ -552,7 +553,7 @@ export default function ChatWindow() {
       if (sentMessage && sentMessage._id) {
         if (!messageIdsRef.current.has(sentMessage._id)) {
           messageIdsRef.current.add(sentMessage._id);
-          
+
           setMessages(prev => {
             if (prev.some(m => m._id === sentMessage._id)) {
               return prev;
@@ -566,7 +567,7 @@ export default function ChatWindow() {
       setAttachments([]);
       setReplyingTo(null);
       setTyping(false);
-      
+
       if (socket && isConnected) {
         socket.emit('user:stop_typing', { conversationId: chatId, userId: currentUserId });
       }
@@ -585,15 +586,15 @@ export default function ChatWindow() {
 
     try {
       setUploading(true);
-      
+
       const uploadedFiles = [];
 
       for (const file of files) {
         const result = await uploadService.uploadFile(file);
-        
+
         uploadedFiles.push({
-          type: file.type.startsWith('image/') ? 'image' : 
-                file.type.startsWith('video/') ? 'video' : 'file',
+          type: file.type.startsWith('image/') ? 'image' :
+            file.type.startsWith('video/') ? 'video' : 'file',
           url: result.url,
           name: file.name,
           size: file.size,
@@ -602,7 +603,7 @@ export default function ChatWindow() {
       }
 
       setAttachments(prev => [...prev, ...uploadedFiles]);
-      
+
     } catch (error) {
       console.error('[ERROR] Error uploading files:', error);
       alert('Failed to upload files. Please try again.');
@@ -640,22 +641,19 @@ export default function ChatWindow() {
         </div>
       </div>
     );
-  }
+  };
 
-  // Render group or 1-on-1 header
   const renderHeader = () => {
     if (isGroup) {
       const activeMembers = chat.participants?.filter(p => p.isActive) || [];
       const memberCount = activeMembers.length;
 
       return (
-        <div className="flex items-center space-x-3 flex-1">
-          <div className="relative">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white font-bold text-lg shadow-lg">
-              {chat.name?.[0]?.toUpperCase() || '👥'}
-            </div>
+        <>
+          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center text-2xl shadow-lg flex-shrink-0">
+            {chat.avatar || '👥'}
           </div>
-          
+
           <div className="flex-1 min-w-0">
             <h1 className="text-lg font-semibold text-white truncate">
               {chat.name || 'Unnamed Group'}
@@ -664,22 +662,22 @@ export default function ChatWindow() {
               {memberCount} member{memberCount !== 1 ? 's' : ''}
             </p>
           </div>
-        </div>
+        </>
       );
     }
 
     return (
-      <div className="flex items-center space-x-3 flex-1">
-        <div className="relative">
+      <>
+        <div className="relative flex-shrink-0">
           <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-lg shadow-lg">
-            {otherUser?.fullName?.[0]?.toUpperCase() || 
-             otherUser?.username?.[0]?.toUpperCase() || '?'}
+            {otherUser?.fullName?.[0]?.toUpperCase() ||
+              otherUser?.username?.[0]?.toUpperCase() || '?'}
           </div>
           {isOtherUserOnline && (
             <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-gray-800 rounded-full"></div>
           )}
         </div>
-        
+
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-semibold text-white truncate">
             {otherUser?.fullName || otherUser?.username || 'Unknown User'}
@@ -696,83 +694,111 @@ export default function ChatWindow() {
             )}
           </p>
         </div>
-      </div>
+      </>
     );
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 overflow-hidden">
+      {/* Background Pattern */}
       <div className="absolute inset-0 opacity-5 pointer-events-none z-0"
-           style={{
-             backgroundImage: `radial-gradient(circle at 2px 2px, rgba(139, 92, 246, 0.3) 1px, transparent 0)`,
-             backgroundSize: '40px 40px'
-           }}
+        style={{
+          backgroundImage: `radial-gradient(circle at 2px 2px, rgba(139, 92, 246, 0.3) 1px, transparent 0)`,
+          backgroundSize: '40px 40px'
+        }}
       ></div>
 
-      {/* HEADER */}
-      <div className="sticky top-0 flex-shrink-0 bg-gray-800/95 backdrop-blur-sm border-b border-gray-700 shadow-lg z-50">
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center space-x-3 flex-1">
-            <button
-              onClick={() => navigate('/chats')}
-              className="p-2 hover:bg-gray-700 rounded-full transition"
-            >
-              <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
+      {/* FIXED HEADER */}
+      <div className="flex-shrink-0 bg-gray-800/95 backdrop-blur-sm border-b border-gray-700 shadow-lg fixed top-0 left-0 right-0 z-40">
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3 flex-1 min-w-0">
+              <button
+                onClick={() => navigate(isGroup ? '/groups' : '/chats')}
+                className="p-2 hover:bg-gray-700 rounded-full transition flex-shrink-0"
+              >
+                <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
 
-            {renderHeader()}
-          </div>
+              {renderHeader()}
+            </div>
 
-          <div className="flex items-center space-x-2">
-            <button className="p-3 bg-blue-500 hover:bg-blue-600 rounded-full transition shadow-lg" title="Video Call">
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            </button>
-            
-            <button className="p-3 bg-green-500 hover:bg-green-600 rounded-full transition shadow-lg" title="Voice Call">
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-              </svg>
-            </button>
+            <div className="flex items-center space-x-2 ml-3">
+              {/* Add Member Button (Admin Only) */}
+              {isGroup && isAdmin && (
+                <button
+                  onClick={() => setShowAddMembers(true)}
+                  className="p-3 bg-gray-700 hover:bg-gray-600 rounded-full transition shadow-lg"
+                  title="Add Members"
+                >
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Three Dots Menu (Admin/Creator) */}
+              {isGroup && (isAdmin || isCreator) && (
+                <button
+                  onClick={() => setShowGroupInfo(true)}
+                  className="p-3 bg-gray-700 hover:bg-gray-600 rounded-full transition shadow-lg"
+                  title="Group Options"
+                >
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* MESSAGES */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3 relative z-10">
+      {/* MESSAGES - with padding for fixed header/footer */}
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto px-3 py-4 space-y-3 relative z-10"
+        style={{
+          paddingTop: '80px',
+          paddingBottom: '120px',
+          scrollBehavior: 'smooth',
+          WebkitOverflowScrolling: 'touch'
+        }}
+      >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <svg className="w-20 h-20 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
             <p className="text-lg font-medium">No messages yet</p>
-            <p className="text-sm text-gray-600">Send a message to start the conversation</p>
+            <p className="text-sm text-gray-600">
+              {isGroup ? 'Be the first to send a message in this group' : 'Send a message to start the conversation'}
+            </p>
           </div>
         ) : (
           messages.map((message, index) => {
             const isOwn = (message.sender?._id || message.sender) === currentUserId;
             const senderInfo = getSenderInfo(message);
-            
+
             const showAvatar = !isOwn && (
-              index === messages.length - 1 || 
+              index === messages.length - 1 ||
               (messages[index + 1]?.sender?._id || messages[index + 1]?.sender) !== (message.sender?._id || message.sender)
             );
-            
-            const mediaItems = message.mediaGroup && message.mediaGroup.length > 0 
-              ? message.mediaGroup 
-              : message.media 
-                ? [message.media] 
+
+            const mediaItems = message.mediaGroup && message.mediaGroup.length > 0
+              ? message.mediaGroup
+              : message.media
+                ? [message.media]
                 : [];
-            
+
             const showDateSeparator = shouldShowDateSeparator(message, messages[index - 1]);
             const messageStatus = getMessageStatus(message);
             const repliedMessage = message.replyTo ? getRepliedMessage(message.replyTo) : null;
-            
+
             return (
-              <div 
+              <div
                 key={message._id || `msg-${index}`}
                 ref={el => messageRefs.current[message._id] = el}
                 className={`${message.reactions && message.reactions.length > 0 ? 'mb-5' : 'mb-2'}`}
@@ -798,7 +824,7 @@ export default function ChatWindow() {
                     </div>
                   )}
 
-                  <div 
+                  <div
                     className={`max-w-[75%] ${isOwn ? 'ml-auto' : 'mr-auto'}`}
                     onMouseDown={(e) => handleLongPressStart(e, message)}
                     onMouseUp={handleLongPressEnd}
@@ -808,69 +834,66 @@ export default function ChatWindow() {
                     onTouchCancel={handleLongPressEnd}
                   >
                     <div className="relative inline-block">
-                      {/* Show sender name in groups */}
                       {isGroup && !isOwn && (
                         <p className="text-xs text-purple-400 font-medium mb-1 px-1">
                           {senderInfo.name}
                         </p>
                       )}
 
-                      <div className={`rounded-2xl px-4 py-2.5 shadow-md ${
-                          isOwn ? 'bg-gradient-to-br from-purple-600 to-purple-700 text-white rounded-br-sm' : 'bg-gray-700 text-gray-100 rounded-bl-sm'
+                      <div className={`rounded-2xl px-4 py-2.5 shadow-md ${isOwn ? 'bg-gradient-to-br from-purple-600 to-purple-700 text-white rounded-br-sm' : 'bg-gray-700 text-gray-100 rounded-bl-sm'
                         }`}>
-                      
-                      {repliedMessage && (
-                        <div 
-                          onClick={() => scrollToMessage(repliedMessage._id)}
-                          className={`mb-2 p-2 rounded-lg border-l-4 cursor-pointer hover:opacity-80 transition ${
-                            isOwn 
-                              ? 'bg-purple-800/30 border-purple-300' 
-                              : 'bg-gray-600/50 border-gray-400'
-                          }`}
-                        >
-                          <p className="text-xs opacity-75 mb-1">
-                            {(repliedMessage.sender?._id || repliedMessage.sender) === currentUserId ? 'You' : getSenderInfo(repliedMessage).name}
-                          </p>
-                          <p className="text-sm line-clamp-2 opacity-90">
-                            {repliedMessage.content || '📷 Photo'}
-                          </p>
-                        </div>
-                      )}
 
-                      {message.content && (
-                        <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
-                          {message.content}
-                        </p>
-                      )}
-
-                      {mediaItems.length > 0 && (
-                        <div className={`${message.content ? 'mt-2' : ''} space-y-2`}>
-                          {mediaItems.map((attachment, idx) => (
-                            <MessageAttachment key={idx} attachment={attachment} isSender={isOwn} />
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-end space-x-1 mt-1">
-                        <span className="text-xs opacity-70">
-                          {message.createdAt ? new Date(message.createdAt).toLocaleTimeString('en-US', {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                            hour12: true
-                          }) : ''}
-                        </span>
-                        
-                        {isOwn && messageStatus && (
-                          <div className="flex items-center">
-                            {renderStatusIcon(messageStatus)}
+                        {repliedMessage && (
+                          <div
+                            onClick={() => scrollToMessage(repliedMessage._id)}
+                            className={`mb-2 p-2 rounded-lg border-l-4 cursor-pointer hover:opacity-80 transition ${isOwn
+                                ? 'bg-purple-800/30 border-purple-300'
+                                : 'bg-gray-600/50 border-gray-400'
+                              }`}
+                          >
+                            <p className="text-xs opacity-75 mb-1">
+                              {(repliedMessage.sender?._id || repliedMessage.sender) === currentUserId ? 'You' : getSenderInfo(repliedMessage).name}
+                            </p>
+                            <p className="text-sm line-clamp-2 opacity-90">
+                              {repliedMessage.content || '📷 Photo'}
+                            </p>
                           </div>
                         )}
-                      </div>
+
+                        {message.content && (
+                          <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+                            {message.content}
+                          </p>
+                        )}
+
+                        {mediaItems.length > 0 && (
+                          <div className={`${message.content ? 'mt-2' : ''} space-y-2`}>
+                            {mediaItems.map((attachment, idx) => (
+                              <MessageAttachment key={idx} attachment={attachment} isSender={isOwn} />
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end space-x-1 mt-1">
+                          <span className="text-xs opacity-70">
+                            {message.createdAt ? new Date(message.createdAt).toLocaleTimeString('en-US', {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            }) : ''}
+                          </span>
+
+                          {isOwn && messageStatus && (
+                            <div className="flex items-center">
+                              {renderStatusIcon(messageStatus)}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {message.reactions && message.reactions.length > 0 && (
-                        <MessageReactionBubble 
-                          reactions={message.reactions} 
+                        <MessageReactionBubble
+                          reactions={message.reactions}
                           currentUserId={currentUserId}
                           isOwn={isOwn}
                         />
@@ -885,6 +908,7 @@ export default function ChatWindow() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Reaction Picker */}
       {showReactionPicker && reactionPickerMessage && (
         <ReactionPicker
           message={reactionPickerMessage}
@@ -897,13 +921,14 @@ export default function ChatWindow() {
         />
       )}
 
+      {/* Context Menu */}
       {contextMenu && (
         <>
-          <div 
-            className="fixed inset-0 z-[90]" 
+          <div
+            className="fixed inset-0 z-[90]"
             onClick={() => setContextMenu(null)}
           />
-          
+
           <div
             className="fixed z-[100] bg-gray-800 rounded-lg shadow-2xl border border-gray-700 animate-scaleIn"
             style={{
@@ -961,8 +986,8 @@ export default function ChatWindow() {
         </>
       )}
 
-      {/* INPUT AREA */}
-      <div className="sticky bottom-0 bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 px-4 py-3 shadow-2xl">
+      {/* FIXED INPUT AREA */}
+      <div className="flex-shrink-0 bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 px-4 py-3 shadow-2xl fixed bottom-0 left-0 right-0 z-40">
         {replyingTo && (
           <div className="mb-3 p-3 bg-gray-700 rounded-lg flex items-start justify-between">
             <div className="flex-1 min-w-0">
@@ -1028,19 +1053,19 @@ export default function ChatWindow() {
           <input ref={fileInputRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx" onChange={handleFileSelect} className="hidden" />
 
           <div className="flex-1 bg-gray-700 rounded-full px-5 py-3 shadow-inner">
-            <input 
-              type="text" 
-              value={newMessage} 
-              onChange={handleTypingInput} 
+            <input
+              type="text"
+              value={newMessage}
+              onChange={handleTypingInput}
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   sendMessage(e);
                 }
-              }} 
-              placeholder={replyingTo ? "Type your reply..." : "Type a message..."} 
-              className="w-full bg-transparent text-white placeholder-gray-400 focus:outline-none" 
-              disabled={sending} 
+              }}
+              placeholder={replyingTo ? "Type your reply..." : "Type a message..."}
+              className="w-full bg-transparent text-white placeholder-gray-400 focus:outline-none"
+              disabled={sending}
             />
           </div>
 
@@ -1059,6 +1084,31 @@ export default function ChatWindow() {
           <div className="absolute top-0 left-0 right-0 bg-red-500/90 text-white text-xs text-center py-1">Reconnecting...</div>
         )}
       </div>
+
+      {/* Modals */}
+      {showAddMembers && (
+        <AddMembersModal
+          group={chat}
+          onClose={() => setShowAddMembers(false)}
+          onMembersAdded={(updatedGroup) => {
+            setChat(updatedGroup);
+            setShowAddMembers(false);
+          }}
+        />
+      )}
+
+      {showGroupInfo && isGroup && (
+        <GroupInfoModal
+          group={chat}
+          onClose={() => setShowGroupInfo(false)}
+          onGroupUpdated={(updatedGroup) => {
+            setChat(updatedGroup);
+          }}
+          onGroupDeleted={() => {
+            navigate('/groups');
+          }}
+        />
+      )}
 
       <style>{`
         .highlight-message {

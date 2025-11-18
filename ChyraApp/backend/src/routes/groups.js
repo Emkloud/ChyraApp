@@ -6,14 +6,17 @@ const { authenticate } = require('../middleware/auth');
 // All routes require authentication
 router.use(authenticate);
 
+// Get all user's groups
+router.get('/', groupController.getUserGroups);
+
 // Create group
 router.post('/', groupController.createGroup);
 
 // Get group details
-router.get('/:groupId', groupController.getGroupDetails);
+router.get('/:groupId', groupController.getGroupById);
 
 // Update group info (admin only)
-router.patch('/:groupId', groupController.updateGroupInfo);
+router.put('/:groupId', groupController.updateGroup);
 
 // Member management
 router.post('/:groupId/members', groupController.addMembers);
@@ -28,9 +31,14 @@ router.post('/:groupId/leave', groupController.leaveGroup);
 router.delete('/:groupId', groupController.deleteGroup);
 
 // Message management
-router.delete('/:groupId/messages/:messageId', groupController.deleteGroupMessage);
+router.delete('/:groupId/messages/:messageId', groupController.deleteMessage);
 
 // Settings
-router.patch('/:groupId/settings', groupController.updateGroupSettings);
+router.patch('/:groupId/settings', groupController.updateSettings);
+
+// ✅ NEW: Subgroup routes
+router.post('/:groupId/subgroups', groupController.createSubgroup);
+router.get('/:groupId/subgroups', groupController.getSubgroups);
+router.delete('/:groupId/subgroups/:subgroupId', groupController.deleteSubgroup);
 
 module.exports = router;

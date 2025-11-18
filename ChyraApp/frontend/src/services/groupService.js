@@ -208,6 +208,47 @@ class GroupService {
       throw error;
     }
   }
+
+  // ==================== SUBGROUP METHODS ====================
+
+  // Create subgroup
+  async createSubgroup(groupId, subgroupData) {
+    try {
+      console.log('[GROUP_SERVICE] Creating subgroup:', { groupId, subgroupData });
+      const response = await api.post(`/groups/${groupId}/subgroups`, subgroupData);
+      console.log('[GROUP_SERVICE] Subgroup created:', response.data);
+      return response.data?.data || response.data;
+    } catch (error) {
+      console.error('[GROUP_SERVICE] Create subgroup error:', error);
+      throw error;
+    }
+  }
+
+  // Get all subgroups of a group
+  async getSubgroups(groupId) {
+    try {
+      console.log('[GROUP_SERVICE] Getting subgroups:', groupId);
+      const response = await api.get(`/groups/${groupId}/subgroups`);
+      console.log('[GROUP_SERVICE] Subgroups fetched:', response.data);
+      return response.data?.data || response.data;
+    } catch (error) {
+      console.error('[GROUP_SERVICE] Get subgroups error:', error);
+      throw error;
+    }
+  }
+
+  // Delete subgroup
+  async deleteSubgroup(groupId, subgroupId) {
+    try {
+      console.log('[GROUP_SERVICE] Deleting subgroup:', { groupId, subgroupId });
+      const response = await api.delete(`/groups/${groupId}/subgroups/${subgroupId}`);
+      console.log('[GROUP_SERVICE] Subgroup deleted:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[GROUP_SERVICE] Delete subgroup error:', error);
+      throw error;
+    }
+  }
 }
 
 // Create instance and export both ways for compatibility

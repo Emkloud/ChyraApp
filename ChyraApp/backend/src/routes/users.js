@@ -11,19 +11,19 @@ const { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } = require('../config/con
 router.get('/', protect, async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    
-    const users = await User.find({ 
+
+    const users = await User.find({
       _id: { $ne: req.user._id },
-      isActive: true 
+      isActive: true
     })
       .select('username fullName profilePicture status bio lastSeen')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ username: 1 });
 
-    const count = await User.countDocuments({ 
+    const count = await User.countDocuments({
       _id: { $ne: req.user._id },
-      isActive: true 
+      isActive: true
     });
 
     res.status(HTTP_STATUS.OK).json({
@@ -50,8 +50,7 @@ router.get('/', protect, async (req, res) => {
 router.get('/search', protect, async (req, res) => {
   try {
     const { q } = req.query;
-    
-    // Require at least 2 characters
+
     if (!q || q.length < 2) {
       return res.status(HTTP_STATUS.OK).json({
         success: true,
@@ -59,7 +58,6 @@ router.get('/search', protect, async (req, res) => {
       });
     }
 
-    // Search by username or email (case insensitive)
     const users = await User.find({
       _id: { $ne: req.user._id },
       isActive: true,
@@ -85,9 +83,58 @@ router.get('/search', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/users/friends
+// @desc    Get user's friends list
+// @access  Private
+// ⚠️ MUST BE BEFORE /:id route
+router.get('/friends', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate(
+      'contacts',
+      'username fullName profilePicture status lastSeen bio'
+    );
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: user.contacts || []
+    });
+  } catch (error) {
+    console.error('Get friends error:', error);
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      message: ERROR_MESSAGES.SERVER_ERROR
+    });
+  }
+});
+
+// @route   GET /api/users/contacts/list
+// @desc    Get user contacts
+// @access  Private
+// ⚠️ MUST BE BEFORE /:id route
+router.get('/contacts/list', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate(
+      'contacts',
+      'username fullName profilePicture status lastSeen bio'
+    );
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: { contacts: user.contacts || [] }
+    });
+  } catch (error) {
+    console.error('Get contacts error:', error);
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      message: ERROR_MESSAGES.SERVER_ERROR
+    });
+  }
+});
+
 // @route   GET /api/users/:id
 // @desc    Get user by ID
 // @access  Private
+// ⚠️ MUST BE AFTER all specific routes (search, friends, contacts/list, etc.)
 router.get('/:id', protect, async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -163,7 +210,6 @@ router.put('/status', protect, async (req, res) => {
     req.user.status = status;
     await req.user.save();
 
-    // Emit status change via Socket.IO
     const io = req.app.get('io');
     if (io) {
       io.emit('user:status', {
@@ -276,29 +322,6 @@ router.delete('/contacts/:userId', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Remove contact error:', error);
-    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-      success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
-    });
-  }
-});
-
-// @route   GET /api/users/contacts/list
-// @desc    Get user contacts
-// @access  Private
-router.get('/contacts/list', protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).populate(
-      'contacts',
-      'username fullName profilePicture status lastSeen bio'
-    );
-
-    res.status(HTTP_STATUS.OK).json({
-      success: true,
-      data: { contacts: user.contacts || [] }
-    });
-  } catch (error) {
-    console.error('Get contacts error:', error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
       message: ERROR_MESSAGES.SERVER_ERROR
