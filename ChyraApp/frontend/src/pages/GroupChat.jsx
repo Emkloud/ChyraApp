@@ -25,6 +25,16 @@ export default function GroupChat() {
   const [showGroupOptions, setShowGroupOptions] = useState(false);
   const [showSubgroupModal, setShowSubgroupModal] = useState(false);
   const [subgroups, setSubgroups] = useState([]);
+  
+  // ✅ NEW: Delete features state
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [showMessageOptions, setShowMessageOptions] = useState(false);
+  const [messageOptionsPosition, setMessageOptionsPosition] = useState({ x: 0, y: 0 });
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteType, setDeleteType] = useState(null); // 'forMe' or 'forEveryone'
+  const [showClearChatConfirm, setShowClearChatConfirm] = useState(false);
+  const longPressTimer = useRef(null);
+  
   const { user } = useAuth();
   const { socket, isConnected } = useSocket();
   const { addToast } = useToast();
@@ -88,9 +98,17 @@ export default function GroupChat() {
       }
     };
 
+    // ✅ ENHANCED: Handle message deletion from socket
     const handleMessageDeleted = (data) => {
-      if (data.conversationId === groupId) {
-        setMessages(prev => prev.filter(msg => msg._id !== data.messageId));
+      console.log('[SOCKET] Message deleted:', data);
+      if (data.conversationId === groupId || data.groupId === groupId) {
+        if (data.deleteType === 'forEveryone') {
+          // Remove message for everyone
+          setMessages(prev => prev.filter(msg => msg._id !== data.messageId));
+        } else if (data.deleteType === 'forMe' && data.userId === user.id) {
+          // Remove only for this user
+          setMessages(prev => prev.filter(msg => msg._id !== data.messageId));
+        }
       }
     };
 
@@ -116,6 +134,16 @@ export default function GroupChat() {
       }
     };
 
+    // ✅ NEW: Handle clear chat
+    const handleChatCleared = (data) => {
+      if (data.conversationId === groupId || data.groupId === groupId) {
+        if (data.clearedBy === user.id) {
+          setMessages([]);
+          addToast('Chat cleared', 'success');
+        }
+      }
+    };
+
     socket.on('message:new', handleNewMessage);
     socket.on('message:receive', handleNewMessage);
     socket.on('newMessage', handleNewMessage);
@@ -126,6 +154,7 @@ export default function GroupChat() {
     socket.on('message:edited', handleMessageEdit);
     socket.on('message:reaction_added', handleReaction);
     socket.on('message:react', handleReaction);
+    socket.on('chat:cleared', handleChatCleared);
 
     socket.emit('conversation:join', { conversationId: groupId });
 
@@ -140,10 +169,24 @@ export default function GroupChat() {
       socket.off('message:edited', handleMessageEdit);
       socket.off('message:reaction_added', handleReaction);
       socket.off('message:react', handleReaction);
+      socket.off('chat:cleared', handleChatCleared);
       
       socket.emit('conversation:leave', { conversationId: groupId });
     };
-  }, [socket, isConnected, groupId]);
+  }, [socket, isConnected, groupId, user.id]);
+
+  // Close message options when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (showMessageOptions) {
+        setShowMessageOptions(false);
+        setSelectedMessage(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showMessageOptions]);
 
   const loadGroup = async () => {
     try {
@@ -309,6 +352,94 @@ export default function GroupChat() {
     setShowEmojiPicker(false);
   };
 
+  // ✅ NEW: Long press handler for mobile
+  const handleLongPressStart = (e, message) => {
+    e.preventDefault();
+    const touch = e.touches ? e.touches[0] : e;
+    
+    longPressTimer.current = setTimeout(() => {
+      setSelectedMessage(message);
+      setMessageOptionsPosition({
+        x: touch.clientX,
+        y: touch.clientY
+      });
+      setShowMessageOptions(true);
+    }, 500);
+  };
+
+  const handleLongPressEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  // ✅ NEW: Right-click handler for desktop
+  const handleContextMenu = (e, message) => {
+    e.preventDefault();
+    setSelectedMessage(message);
+    setMessageOptionsPosition({
+      x: e.clientX,
+      y: e.clientY
+    });
+    setShowMessageOptions(true);
+  };
+
+  // ✅ NEW: Delete message handler
+  const handleDeleteMessage = async (type) => {
+    if (!selectedMessage) return;
+    
+    try {
+      const response = await axios.delete(
+        `${API_URL}/groups/${groupId}/messages/${selectedMessage._id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          data: { deleteType: type }
+        }
+      );
+
+      if (response.data.success) {
+        if (type === 'forEveryone') {
+          setMessages(prev => prev.filter(msg => msg._id !== selectedMessage._id));
+          addToast('Message deleted for everyone', 'success');
+        } else {
+          setMessages(prev => prev.filter(msg => msg._id !== selectedMessage._id));
+          addToast('Message deleted for you', 'success');
+        }
+      }
+    } catch (error) {
+      console.error('Delete message error:', error);
+      addToast(error.response?.data?.message || 'Failed to delete message', 'error');
+    } finally {
+      setShowDeleteConfirm(false);
+      setShowMessageOptions(false);
+      setSelectedMessage(null);
+      setDeleteType(null);
+    }
+  };
+
+  // ✅ NEW: Clear chat handler
+  const handleClearChat = async () => {
+    try {
+      const response = await axios.delete(
+        `${API_URL}/groups/${groupId}/messages/clear`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      if (response.data.success) {
+        setMessages([]);
+        addToast('Chat cleared', 'success');
+      }
+    } catch (error) {
+      console.error('Clear chat error:', error);
+      addToast(error.response?.data?.message || 'Failed to clear chat', 'error');
+    } finally {
+      setShowClearChatConfirm(false);
+    }
+  };
+
   const handleLeaveGroup = async () => {
     if (!confirm('Are you sure you want to leave this group?')) return;
     
@@ -380,18 +511,17 @@ export default function GroupChat() {
 
   const isCreator = (group.createdBy?._id || group.createdBy || group.creator?._id || group.creator) === user.id;
 
-  // ✅ FIX: Better member count calculation
   const memberCount = group.participants?.length || group.members?.length || 0;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
+    <div className="flex flex-col h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 overflow-hidden">
       {/* HEADER */}
-      <div className="flex-shrink-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm fixed top-0 left-0 right-0 z-40">
+      <div className="flex-shrink-0 bg-gray-800/95 backdrop-blur-sm border-b border-gray-700 shadow-lg fixed top-0 left-0 right-0 z-40">
         <div className="px-4 py-3">
           <div className="flex items-center space-x-3">
             <button
               onClick={() => navigate('/groups')}
-              className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition flex-shrink-0"
+              className="p-2 text-gray-300 hover:bg-gray-700 rounded-full transition flex-shrink-0"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -495,6 +625,17 @@ export default function GroupChat() {
 
                       <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
 
+                      {/* ✅ NEW: Clear Chat Option */}
+                      <button
+                        onClick={() => { setShowGroupOptions(false); setShowClearChatConfirm(true); }}
+                        className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
+                      >
+                        <svg className="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        <span className="text-orange-600 dark:text-orange-400">Clear Chat</span>
+                      </button>
+
                       {!isCreator && (
                         <button
                           onClick={() => { setShowGroupOptions(false); handleLeaveGroup(); }}
@@ -530,12 +671,13 @@ export default function GroupChat() {
       {/* MESSAGES */}
       <div 
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4 chat-background"
+        className="flex-1 overflow-y-auto p-4 space-y-4"
         style={{ 
           paddingTop: '80px',
           paddingBottom: '100px',
           scrollBehavior: 'smooth',
-          WebkitOverflowScrolling: 'touch'
+          WebkitOverflowScrolling: 'touch',
+          background: 'linear-gradient(to bottom right, #1a1a2e, #16213e, #0f3460)'
         }}
       >
         {messages.length === 0 ? (
@@ -565,6 +707,10 @@ export default function GroupChat() {
                 <div
                   key={message._id}
                   className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}
+                  onContextMenu={(e) => handleContextMenu(e, message)}
+                  onTouchStart={(e) => handleLongPressStart(e, message)}
+                  onTouchEnd={handleLongPressEnd}
+                  onTouchCancel={handleLongPressEnd}
                 >
                   <div className={`flex items-end space-x-2 max-w-[80%] sm:max-w-[75%] ${isOwn ? 'flex-row-reverse space-x-reverse' : ''}`}>
                     {!isOwn && showAvatar && (
@@ -631,8 +777,150 @@ export default function GroupChat() {
         )}
       </div>
 
+      {/* ✅ NEW: Message Options Context Menu */}
+      {showMessageOptions && selectedMessage && (
+        <>
+          <div className="fixed inset-0 z-50" onClick={() => { setShowMessageOptions(false); setSelectedMessage(null); }} />
+          <div 
+            className="fixed z-50 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-2 min-w-[180px]"
+            style={{
+              left: Math.min(messageOptionsPosition.x, window.innerWidth - 200),
+              top: Math.min(messageOptionsPosition.y, window.innerHeight - 200)
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Copy option */}
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(selectedMessage.content || '');
+                addToast('Copied to clipboard', 'success');
+                setShowMessageOptions(false);
+                setSelectedMessage(null);
+              }}
+              className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
+            >
+              <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <span className="text-gray-700 dark:text-gray-200">Copy</span>
+            </button>
+
+            {/* Delete for me - always available for own messages */}
+            {(selectedMessage.sender?._id || selectedMessage.sender) === user.id && (
+              <>
+                <button
+                  onClick={() => {
+                    setDeleteType('forMe');
+                    setShowDeleteConfirm(true);
+                    setShowMessageOptions(false);
+                  }}
+                  className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
+                >
+                  <svg className="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  <span className="text-orange-600 dark:text-orange-400">Delete for me</span>
+                </button>
+
+                {/* Delete for everyone - within time limit */}
+                {Date.now() - new Date(selectedMessage.createdAt).getTime() < 60 * 60 * 1000 && (
+                  <button
+                    onClick={() => {
+                      setDeleteType('forEveryone');
+                      setShowDeleteConfirm(true);
+                      setShowMessageOptions(false);
+                    }}
+                    className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                  >
+                    <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    <span className="text-red-600 dark:text-red-400">Delete for everyone</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* Admin can delete any message */}
+            {isAdmin && (selectedMessage.sender?._id || selectedMessage.sender) !== user.id && (
+              <button
+                onClick={() => {
+                  setDeleteType('forEveryone');
+                  setShowDeleteConfirm(true);
+                  setShowMessageOptions(false);
+                }}
+                className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+              >
+                <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span className="text-red-600 dark:text-red-400">Delete (Admin)</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ✅ NEW: Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-sm p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Delete Message?
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
+              {deleteType === 'forEveryone' 
+                ? 'This message will be deleted for everyone in this group.' 
+                : 'This message will be deleted for you only.'}
+            </p>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => { setShowDeleteConfirm(false); setDeleteType(null); }}
+                className="flex-1 py-3 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteMessage(deleteType)}
+                className="flex-1 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ NEW: Clear Chat Confirmation Modal */}
+      {showClearChatConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-sm p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Clear Chat?
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
+              This will clear all messages from this chat for you. Other members will still see the messages.
+            </p>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowClearChatConfirm(false)}
+                className="flex-1 py-3 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearChat}
+                className="flex-1 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* INPUT */}
-      <div className="flex-shrink-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4 shadow-lg fixed bottom-0 left-0 right-0 z-40">
+      <div className="flex-shrink-0 bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 p-4 shadow-lg fixed bottom-0 left-0 right-0 z-40">
         {showEmojiPicker && (
           <div className="absolute bottom-20 right-4 z-50">
             <EmojiPicker onEmojiClick={handleEmojiClick} />
@@ -776,7 +1064,6 @@ function AddMemberModal({ groupId, currentMembers, onClose }) {
       setLoading(true);
       let availableUsers = [];
       
-      // Try contacts/friends first, then all users
       const endpoints = ['/contacts', '/users/friends', '/users'];
 
       for (const endpoint of endpoints) {
@@ -787,7 +1074,6 @@ function AddMemberModal({ groupId, currentMembers, onClose }) {
           
           console.log(`[ADD_MEMBER] ${endpoint} response:`, response.data);
           
-          // Extract users from various response formats
           if (Array.isArray(response.data)) {
             availableUsers = response.data;
           } else if (Array.isArray(response.data?.data)) {
@@ -811,9 +1097,7 @@ function AddMemberModal({ groupId, currentMembers, onClose }) {
         }
       }
 
-      // Extract current member IDs
       const memberIds = currentMembers.map(m => {
-        // Handle different formats
         if (typeof m === 'string') return m;
         if (m.user?._id) return m.user._id.toString();
         if (m.user && typeof m.user === 'string') return m.user;
@@ -823,7 +1107,6 @@ function AddMemberModal({ groupId, currentMembers, onClose }) {
 
       console.log('[ADD_MEMBER] Current member IDs:', memberIds);
 
-      // Filter out users already in group
       const filtered = availableUsers.filter(u => {
         const uId = (u._id || u.id)?.toString();
         const isAlreadyMember = memberIds.includes(uId);
@@ -956,7 +1239,6 @@ function ViewMembersModal({ group, isAdmin, currentUserId, onClose }) {
   const { addToast } = useToast();
   const token = localStorage.getItem('token');
   
-  // ✅ FIX: Get all participants without problematic filter
   const members = group.participants || group.members || [];
   
   console.log('[VIEW_MEMBERS] Group:', group);
@@ -1007,14 +1289,12 @@ function ViewMembersModal({ group, isAdmin, currentUserId, onClose }) {
             </div>
           ) : (
             members.map((member, index) => {
-              // ✅ FIX: Handle both populated and unpopulated user objects
               const memberData = member.user || member;
               const memberId = memberData._id || memberData.id || (typeof member.user === 'string' ? member.user : null);
               const isMemberAdmin = member.role === 'admin';
               const creatorId = group.createdBy?._id || group.createdBy;
               const isMemberCreator = memberId && creatorId && memberId.toString() === creatorId.toString();
               
-              // If user data isn't populated, show placeholder
               const displayName = memberData.fullName || memberData.username || `Member ${index + 1}`;
               const username = memberData.username || 'unknown';
               

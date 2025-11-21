@@ -1,277 +1,306 @@
-const { SOCKET_EVENTS } = require('../config/constants');
-const User = require('../models/User');
-const Message = require('../models/Message');
-const Conversation = require('../models/Conversation');
-const logger = require('../utils/logger');
+// backend/src/services/socketService.js
+// 🚀 Real-time engine for ChyraApp (Socket.IO)
+// - DB-backed messages + read receipts
+// - Online users list (IDs)
+// - Rich presence: Online / Last seen via presence:update
 
-/**
- * Initialize Socket.IO event handlers
- * @param {Object} io - Socket.IO server instance
- */
-const initializeSocket = (io) => {
-  io.on(SOCKET_EVENTS.CONNECTION, async (socket) => {
+const Conversation = require("../models/Conversation");
+const Message = require("../models/Message");
+const User = require("../models/User");
+
+const onlineUsers = new Map(); // Map<userId, socketId>
+
+module.exports = function (io) {
+  /**
+   * Emit a single user's presence to all clients
+   */
+  async function emitPresenceUpdate(userId) {
     try {
-      const userId = socket.userId;
-      logger.info(`User connected: ${userId} (Socket ID: ${socket.id})`);
+      const user = await User.findById(userId).select(
+        "_id isOnline status lastSeen"
+      );
+      if (!user) return;
 
-      // Update user status to online
-      await User.findByIdAndUpdate(userId, {
-        status: 'online',
-        socketId: socket.id,
-        lastSeen: Date.now()
+      io.emit("presence:update", {
+        userId: String(user._id),
+        isOnline: !!user.isOnline,
+        status: user.status || (user.isOnline ? "online" : "offline"),
+        lastSeen: user.lastSeen,
       });
+    } catch (err) {
+      console.error("❌ emitPresenceUpdate error:", err);
+    }
+  }
 
-      // Join user's personal room
-      socket.join(`user:${userId}`);
+  /**
+   * Update presence fields on auth / disconnect
+   */
+  async function updateUserPresence(userId, { online, socketId = null }) {
+    try {
+      const now = new Date();
+      const update = {
+        isOnline: !!online,
+        status: online ? "online" : "offline",
+        lastSeen: now,
+        socketId: online ? socketId : null,
+      };
 
-      // Emit user online status to all connected users
-      socket.broadcast.emit(SOCKET_EVENTS.USER_ONLINE, {
-        userId,
-        status: 'online'
-      });
+      await User.findByIdAndUpdate(userId, update, { new: false });
+      await emitPresenceUpdate(userId);
+    } catch (err) {
+      console.error("❌ updateUserPresence error:", err);
+    }
+  }
 
-      // Handle user joining conversation room
-      socket.on(SOCKET_EVENTS.CONVERSATION_JOIN, async ({ conversationId }) => {
-        try {
-          // Verify user is participant
-          const conversation = await Conversation.findById(conversationId);
-          
-          if (conversation && conversation.isParticipant(userId)) {
-            socket.join(`conversation:${conversationId}`);
-            logger.info(`User ${userId} joined conversation ${conversationId}`);
+  io.on("connection", (socket) => {
+    console.log("⚡ Socket connected:", socket.id);
 
-            // Mark messages as delivered
-            const undeliveredMessages = await Message.find({
-              conversation: conversationId,
-              sender: { $ne: userId },
-              'deliveredTo.user': { $ne: userId }
-            });
+    /**
+     * 🔐 AUTHENTICATE USER
+     */
+    socket.on("auth", async ({ userId }) => {
+      try {
+        if (!userId) return;
 
-            for (const message of undeliveredMessages) {
-              message.markAsDelivered(userId);
-              await message.save();
+        const uid = String(userId);
 
-              // Emit delivery status to sender
-              io.to(`user:${message.sender}`).emit(SOCKET_EVENTS.MESSAGE_DELIVERED, {
-                messageId: message._id,
-                userId,
-                conversationId
+        onlineUsers.set(uid, socket.id);
+        socket.userId = uid;
+
+        socket.join(`user:${uid}`);
+
+        console.log(`👤 User authenticated: ${uid}`);
+
+        await updateUserPresence(uid, {
+          online: true,
+          socketId: socket.id,
+        });
+
+        broadcastOnlineUsers(io);
+      } catch (err) {
+        console.error("❌ Auth error:", err);
+      }
+    });
+
+    /**
+     * 📌 Join a conversation room for messaging
+     */
+    socket.on("conversation:join", async ({ conversationId }) => {
+      try {
+        if (!conversationId) return;
+        socket.join(`conversation:${conversationId}`);
+
+        console.log(
+          `💬 User ${socket.userId} joined conversation ${conversationId}`
+        );
+      } catch (err) {
+        console.error("❌ conversation:join error:", err);
+      }
+    });
+
+    /**
+     * ✉️ SEND MESSAGE (DB + realtime broadcast)
+     */
+    socket.on("message:send", async (msg) => {
+      try {
+        if (!msg || !msg.conversationId) return;
+        if (!socket.userId) return;
+
+        const conversationId = String(msg.conversationId);
+        const senderId = String(socket.userId);
+
+        console.log("📨 message:send event received:", {
+          conversationId,
+          senderId,
+        });
+
+        const conversation = await Conversation.findById(conversationId);
+        if (!conversation) {
+          console.warn(
+            "⚠️ message:send: conversation not found:",
+            conversationId
+          );
+          return;
+        }
+
+        const isParticipant =
+          typeof conversation.isParticipant === "function"
+            ? conversation.isParticipant(senderId)
+            : conversation.participants.some((p) => {
+                const pid = p.user?._id || p.user;
+                return (
+                  pid &&
+                  String(pid) === senderId &&
+                  p.isActive !== false
+                );
               });
-            }
-          }
-        } catch (error) {
-          logger.error('Error joining conversation:', error);
-          socket.emit(SOCKET_EVENTS.ERROR, {
-            message: 'Failed to join conversation'
-          });
+
+        if (!isParticipant) {
+          console.warn(
+            "⚠️ message:send: user is not participant of conversation",
+            { senderId, conversationId }
+          );
+          return;
         }
-      });
 
-      // Handle user leaving conversation room
-      socket.on(SOCKET_EVENTS.CONVERSATION_LEAVE, ({ conversationId }) => {
-        socket.leave(`conversation:${conversationId}`);
-        logger.info(`User ${userId} left conversation ${conversationId}`);
-      });
+        const rawContent = msg.content || {};
+        const text =
+          typeof rawContent === "string"
+            ? rawContent
+            : rawContent.text || "";
 
-      // Handle user typing
-      socket.on(SOCKET_EVENTS.USER_TYPING, ({ conversationId }) => {
-        socket.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.USER_TYPING, {
-          userId,
-          conversationId
+        const type =
+          msg.type ||
+          rawContent.type ||
+          (msg.media ? "media" : "text");
+
+        const message = new Message({
+          conversation: conversationId,
+          sender: senderId,
+          type,
+          content: text,
+          media: msg.media || undefined,
+          replyTo: msg.replyTo || null,
+          readBy: [{ user: senderId, readAt: new Date() }],
         });
-      });
 
-      // Handle user stop typing
-      socket.on(SOCKET_EVENTS.USER_STOP_TYPING, ({ conversationId }) => {
-        socket.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.USER_STOP_TYPING, {
-          userId,
-          conversationId
-        });
-      });
+        await message.save();
+        await message.populate("sender", "username fullName profilePicture");
 
-      // Handle new message (real-time broadcast)
-      socket.on(SOCKET_EVENTS.MESSAGE_SEND, async (messageData) => {
-        try {
-          const { conversationId, tempId } = messageData;
+        conversation.lastMessage = message._id;
+        conversation.lastMessageAt = message.createdAt || new Date();
+        await conversation.save();
 
-          // Emit to conversation room (including sender for confirmation)
-          io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.MESSAGE_RECEIVE, {
-            ...messageData,
-            tempId // For client-side optimistic updates
-          });
+        const payloadToSend = {
+          _id: message._id,
+          conversationId,
+          conversation: conversationId,
+          sender: message.sender,
+          text: message.content,
+          content: message.content,
+          type: message.type,
+          media: message.media,
+          replyTo: message.replyTo,
+          createdAt: message.createdAt,
+          readBy: message.readBy || [],
+          status: "delivered",
+        };
 
-          logger.info(`Message sent in conversation ${conversationId} by user ${userId}`);
-        } catch (error) {
-          logger.error('Error sending message:', error);
-          socket.emit(SOCKET_EVENTS.ERROR, {
-            message: 'Failed to send message',
-            tempId: messageData.tempId
-          });
-        }
-      });
+        io.to(`conversation:${conversationId}`).emit(
+          "message:receive",
+          payloadToSend
+        );
+      } catch (err) {
+        console.error("❌ message:send error:", err);
+      }
+    });
 
-      // Handle message read
-      socket.on(SOCKET_EVENTS.MESSAGE_READ, async ({ messageId, conversationId }) => {
-        try {
-          const message = await Message.findById(messageId);
-          
-          if (message && !message.isReadBy(userId)) {
-            message.markAsRead(userId);
-            await message.save();
+    /**
+     * 👀 READ RECEIPT
+     */
+    socket.on("message:read", async ({ messageId, conversationId }) => {
+      try {
+        if (!messageId || !conversationId || !socket.userId) return;
 
-            // Emit read receipt to conversation
-            io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.MESSAGE_READ, {
-              messageId,
-              userId,
-              conversationId,
-              readAt: Date.now()
-            });
+        const msgDoc = await Message.findById(messageId);
+        if (!msgDoc) return;
 
-            logger.info(`Message ${messageId} marked as read by user ${userId}`);
-          }
-        } catch (error) {
-          logger.error('Error marking message as read:', error);
-        }
-      });
+        msgDoc.markAsRead(socket.userId);
+        await msgDoc.save();
 
-      // Handle message edit
-      socket.on(SOCKET_EVENTS.MESSAGE_EDIT, ({ messageId, conversationId, content }) => {
-        io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.MESSAGE_EDIT, {
-          messageId,
-          content,
-          editedAt: Date.now(),
-          userId
-        });
-        logger.info(`Message ${messageId} edited by user ${userId}`);
-      });
+        const readAt = new Date();
 
-      // Handle message delete
-      socket.on(SOCKET_EVENTS.MESSAGE_DELETE, ({ messageId, conversationId, deleteType }) => {
-        if (deleteType === 'for_everyone') {
-          io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.MESSAGE_DELETE, {
+        io.to(`conversation:${conversationId}`).emit(
+          "message:read:update",
+          {
             messageId,
             conversationId,
-            deleteType
-          });
-          logger.info(`Message ${messageId} deleted for everyone by user ${userId}`);
+            userId: socket.userId,
+            readAt,
+          }
+        );
+      } catch (err) {
+        console.error("❌ message:read error:", err);
+      }
+    });
+
+    /**
+     * ✏️ TYPING INDICATOR
+     */
+    socket.on("typing:start", ({ conversationId }) => {
+      if (!conversationId || !socket.userId) return;
+
+      socket
+        .to(`conversation:${conversationId}`)
+        .emit("user:typing", socket.userId);
+    });
+
+    socket.on("typing:stop", ({ conversationId }) => {
+      if (!conversationId || !socket.userId) return;
+
+      socket
+        .to(`conversation:${conversationId}`)
+        .emit("user:stopTyping", socket.userId);
+    });
+
+    /**
+     * 🔧 CONVERSATION UPDATED
+     */
+    socket.on("conversation:update", (conv) => {
+      if (!conv || !conv._id) return;
+      io.to(`conversation:${conv._id}`).emit(
+        "conversation:update",
+        conv
+      );
+    });
+
+    /**
+     * ➕ NEW CONVERSATION CREATED
+     */
+    socket.on("conversation:create", (conv) => {
+      if (!conv || !Array.isArray(conv.participants)) return;
+
+      conv.participants.forEach((p) => {
+        const uid = p.user?._id || p.user;
+        if (!uid) return;
+
+        const targetSocket = onlineUsers.get(String(uid));
+        if (targetSocket) {
+          io.to(targetSocket).emit("conversation:create", conv);
         }
       });
+    });
 
-      // Handle message reaction
-      socket.on(SOCKET_EVENTS.MESSAGE_REACT, ({ messageId, conversationId, emoji }) => {
-        io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.MESSAGE_REACT, {
-          messageId,
-          userId,
-          emoji,
-          conversationId
-        });
-        logger.info(`User ${userId} reacted to message ${messageId} with ${emoji}`);
-      });
+    /**
+     * 🔌 DISCONNECT HANDLER
+     */
+    socket.on("disconnect", async () => {
+      try {
+        if (socket.userId) {
+          const uid = String(socket.userId);
+          onlineUsers.delete(uid);
+          console.log(`❌ User disconnected: ${uid}`);
 
-      // Handle conversation update
-      socket.on(SOCKET_EVENTS.CONVERSATION_UPDATE, ({ conversationId, updates }) => {
-        io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.CONVERSATION_UPDATE, {
-          conversationId,
-          updates,
-          userId
-        });
-        logger.info(`Conversation ${conversationId} updated by user ${userId}`);
-      });
-
-      // Handle user status change
-      socket.on('user:status', async ({ status }) => {
-        try {
-          await User.findByIdAndUpdate(userId, { status });
-          
-          // Broadcast status change to all users
-          socket.broadcast.emit('user:status', {
-            userId,
-            status
-          });
-
-          logger.info(`User ${userId} status changed to ${status}`);
-        } catch (error) {
-          logger.error('Error updating user status:', error);
-        }
-      });
-
-      // Handle call initiation (for future video/voice calls)
-      socket.on(SOCKET_EVENTS.CALL_INITIATE, ({ conversationId, callType, callerId }) => {
-        socket.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.CALL_INITIATE, {
-          conversationId,
-          callType,
-          callerId,
-          callerName: socket.user.fullName
-        });
-        logger.info(`Call initiated in conversation ${conversationId} by user ${userId}`);
-      });
-
-      // Handle call accept
-      socket.on(SOCKET_EVENTS.CALL_ACCEPT, ({ conversationId, callerId }) => {
-        io.to(`user:${callerId}`).emit(SOCKET_EVENTS.CALL_ACCEPT, {
-          conversationId,
-          acceptedBy: userId
-        });
-        logger.info(`Call accepted in conversation ${conversationId} by user ${userId}`);
-      });
-
-      // Handle call reject
-      socket.on(SOCKET_EVENTS.CALL_REJECT, ({ conversationId, callerId }) => {
-        io.to(`user:${callerId}`).emit(SOCKET_EVENTS.CALL_REJECT, {
-          conversationId,
-          rejectedBy: userId
-        });
-        logger.info(`Call rejected in conversation ${conversationId} by user ${userId}`);
-      });
-
-      // Handle call end
-      socket.on(SOCKET_EVENTS.CALL_END, ({ conversationId }) => {
-        io.to(`conversation:${conversationId}`).emit(SOCKET_EVENTS.CALL_END, {
-          conversationId,
-          endedBy: userId
-        });
-        logger.info(`Call ended in conversation ${conversationId} by user ${userId}`);
-      });
-
-      // Handle disconnect
-      socket.on(SOCKET_EVENTS.DISCONNECT, async () => {
-        try {
-          // Update user status to offline
-          await User.findByIdAndUpdate(userId, {
-            status: 'offline',
+          await updateUserPresence(uid, {
+            online: false,
             socketId: null,
-            lastSeen: Date.now()
           });
-
-          // Broadcast user offline status
-          socket.broadcast.emit(SOCKET_EVENTS.USER_OFFLINE, {
-            userId,
-            lastSeen: Date.now()
-          });
-
-          logger.info(`User disconnected: ${userId}`);
-        } catch (error) {
-          logger.error('Error handling disconnect:', error);
         }
-      });
+      } catch (err) {
+        console.error("❌ disconnect handler error:", err);
+      }
 
-      // Handle errors
-      socket.on('error', (error) => {
-        logger.error(`Socket error for user ${userId}:`, error);
-      });
-
-    } catch (error) {
-      logger.error('Socket connection error:', error);
-      socket.disconnect();
-    }
+      broadcastOnlineUsers(io);
+    });
   });
 
-  // Handle connection errors
-  io.on('connect_error', (error) => {
-    logger.error('Socket.IO connection error:', error);
-  });
-
-  logger.info('Socket.IO initialized successfully');
+  /**
+   * Broadcast online users (IDs array) to everyone
+   */
+  function broadcastOnlineUsers(io) {
+    const online = Array.from(onlineUsers.keys());
+    io.emit("onlineUsers", online);
+    io.emit("users:online", online);
+    console.log("📡 Online users:", online);
+  }
 };
-
-module.exports = initializeSocket;

@@ -20,19 +20,19 @@ const userSchema = new mongoose.Schema({
     lowercase: true,
     match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email']
   },
-  // ✅ NEW: Phone number (REQUIRED)
+  // ✅ Phone number (REQUIRED)
   phoneNumber: {
     type: String,
     required: [true, 'Phone number is required'],
     unique: true,
     trim: true
   },
-  // ✅ NEW: Hashed phone for privacy
+  // ✅ Hashed phone for privacy
   hashedPhone: {
     type: String,
     index: true
   },
-  // ✅ NEW: Phone visibility setting
+  // ✅ Phone visibility setting
   phoneVisibility: {
     type: String,
     enum: ['everyone', 'contacts', 'nobody'],
@@ -56,6 +56,8 @@ const userSchema = new mongoose.Schema({
     type: String,
     maxlength: [150, 'Bio cannot exceed 150 characters']
   },
+
+  // ✅ Presence fields used for Online / Last seen
   status: {
     type: String,
     enum: ['online', 'offline', 'away', 'busy'],
@@ -72,7 +74,8 @@ const userSchema = new mongoose.Schema({
   socketId: {
     type: String
   },
-  // ✅ NEW: Friends list
+
+  // ✅ Friends / contacts
   friends: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -81,7 +84,8 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-  // ✅ NEW: Synced phone contacts (hashed)
+
+  // ✅ Synced phone contacts (hashed)
   syncedContacts: [{
     phoneHash: String,
     addedAt: {
@@ -89,14 +93,17 @@ const userSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+
   isActive: {
     type: Boolean,
     default: true
   },
+
   refreshTokens: [{
     token: String,
     expiresAt: Date
   }],
+
   settings: {
     notifications: {
       type: Boolean,
@@ -110,6 +117,10 @@ const userSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// ✅ Helpful indexes for presence queries
+userSchema.index({ isOnline: 1 });
+userSchema.index({ lastSeen: -1 });
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {
@@ -139,12 +150,14 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// ✅ NEW: Check if user is friends with another user
+// ✅ Check if user is friends with another user
 userSchema.methods.isFriendsWith = function(userId) {
-  return this.friends.some(friendId => friendId.toString() === userId.toString());
+  return this.friends.some(
+    friendId => friendId.toString() === userId.toString()
+  );
 };
 
-// ✅ NEW: Add friend
+// ✅ Add friend
 userSchema.methods.addFriend = async function(userId) {
   if (!this.isFriendsWith(userId)) {
     this.friends.push(userId);
@@ -152,9 +165,11 @@ userSchema.methods.addFriend = async function(userId) {
   }
 };
 
-// ✅ NEW: Remove friend
+// ✅ Remove friend
 userSchema.methods.removeFriend = async function(userId) {
-  this.friends = this.friends.filter(friendId => friendId.toString() !== userId.toString());
+  this.friends = this.friends.filter(
+    friendId => friendId.toString() !== userId.toString()
+  );
   await this.save();
 };
 

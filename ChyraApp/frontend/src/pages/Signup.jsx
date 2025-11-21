@@ -3,24 +3,31 @@ import { useNavigate } from "react-router-dom";
 import authService from "../services/authService";
 import "../styles/authBackground.css";
 
-export default function Login() {
+export default function Signup() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: "", password: "" });
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+
   const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const handleLogin = async (e) => {
+  const handleSignup = async (e) => {
     e.preventDefault();
     setLoading(true);
+
     try {
-      await authService.login(form.email, form.password);
+      await authService.register(form);
       navigate("/chats");
     } catch (err) {
-      alert(err.message || "Login failed");
+      alert(err.message || "Signup failed");
     }
+
     setLoading(false);
   };
 
@@ -28,14 +35,22 @@ export default function Login() {
     <div className="auth-page">
       <div className="auth-card">
 
-        <h1 className="auth-title">ChyraApp</h1>
-        <p className="auth-subtitle">Your world. Connected.</p>
+        <h1 className="auth-title">Create Account</h1>
+        <p className="auth-subtitle">Join ChyraApp today ✨</p>
 
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleSignup}>
+          <input
+            name="name"
+            placeholder="Full Name"
+            className="auth-input"
+            onChange={handleChange}
+            required
+          />
+
           <input
             type="email"
             name="email"
-            placeholder="Email address"
+            placeholder="Email Address"
             className="auth-input"
             onChange={handleChange}
             required
@@ -50,15 +65,15 @@ export default function Login() {
             required
           />
 
-          <button className="auth-button" disabled={loading}>
-            {loading ? "Logging in..." : "Log in"}
+          <button className="auth-button">
+            {loading ? "Creating..." : "Sign Up"}
           </button>
         </form>
 
         <div className="auth-bottom-text">
-          Don't have an account?{" "}
-          <span className="auth-link" onClick={() => navigate("/signup")}>
-            Sign up
+          Already have an account?
+          <span className="auth-link" onClick={() => navigate("/login")}>
+            Login
           </span>
         </div>
       </div>

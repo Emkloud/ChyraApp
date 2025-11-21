@@ -167,10 +167,13 @@ router.get('/:id/messages', async (req, res) => {
       });
     }
 
-    // Build query
+    // Build query - exclude messages deleted by this user
     const query = {
       conversation: groupId,
-      'deletedBy.user': { $ne: userId }
+      $and: [
+        { 'deletedBy.user': { $ne: userId } },
+        { 'deletedForEveryone': { $ne: true } }
+      ]
     };
 
     if (cursor) {
@@ -308,7 +311,9 @@ router.post('/:id/messages', async (req, res) => {
       content: content || '',
       type: type || 'text',
       media: media || null,
-      replyTo: replyTo || null
+      replyTo: replyTo || null,
+      deletedBy: [],
+      deletedForEveryone: false
     });
 
     // Update group's last message
@@ -388,8 +393,257 @@ router.post('/:id/messages', async (req, res) => {
   }
 });
 
-// Delete message in group
-router.delete('/:id/messages/:messageId', groupController.deleteMessage);
+// ==================== DELETE MESSAGE ROUTES ====================
+
+// @route   DELETE /api/groups/:id/messages/clear
+// @desc    Clear all messages for current user
+// @access  Private
+router.delete('/:id/messages/clear', async (req, res) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.user.id || req.user._id;
+
+    console.log('🗑️ Clearing chat for user:', userId, 'in group:', groupId);
+
+    const group = await Conversation.findById(groupId);
+
+    if (!group || !group.isGroup) {
+      return res.status(404).json({
+        success: false,
+        message: 'Group not found'
+      });
+    }
+
+    // Check membership
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not a member of this group'
+      });
+    }
+
+    // Add user to deletedBy array for all messages in this group
+    const result = await Message.updateMany(
+      { 
+        conversation: groupId,
+        'deletedBy.user': { $ne: userId }
+      },
+      { 
+        $push: { 
+          deletedBy: { 
+            user: userId, 
+            deletedAt: new Date() 
+          } 
+        } 
+      }
+    );
+
+    console.log('✅ Cleared', result.modifiedCount, 'messages for user');
+
+    // Emit socket event
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${userId}`).emit('chat:cleared', {
+        conversationId: groupId,
+        groupId: groupId,
+        clearedBy: userId.toString(),
+        clearedAt: Date.now()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Chat cleared',
+      data: { clearedCount: result.modifiedCount }
+    });
+  } catch (error) {
+    console.error('❌ Clear chat error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear chat',
+      error: error.message
+    });
+  }
+});
+
+// @route   DELETE /api/groups/:id/messages/:messageId
+// @desc    Delete a specific message
+// @access  Private
+router.delete('/:id/messages/:messageId', async (req, res) => {
+  try {
+    const groupId = req.params.id;
+    const messageId = req.params.messageId;
+    const userId = req.user.id || req.user._id;
+    const { deleteType } = req.body; // 'forMe' or 'forEveryone'
+
+    console.log('🗑️ Deleting message:', messageId, 'type:', deleteType);
+
+    const group = await Conversation.findById(groupId);
+
+    if (!group || !group.isGroup) {
+      return res.status(404).json({
+        success: false,
+        message: 'Group not found'
+      });
+    }
+
+    // Check membership
+    const isMember = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.isActive !== false;
+    });
+
+    if (!isMember) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not a member of this group'
+      });
+    }
+
+    const message = await Message.findById(messageId);
+
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    // Check if message belongs to this group
+    if (message.conversation.toString() !== groupId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message does not belong to this group'
+      });
+    }
+
+    const senderId = message.sender?._id || message.sender;
+    const isOwnMessage = senderId && senderId.toString() === userId.toString();
+
+    // Check if user is admin
+    const isAdmin = group.participants.some(p => {
+      const participantId = p.user?._id || p.user;
+      return participantId && participantId.toString() === userId.toString() && p.role === 'admin';
+    });
+
+    // Handle different delete types
+    if (deleteType === 'forEveryone') {
+      // Only message sender or admin can delete for everyone
+      if (!isOwnMessage && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only delete your own messages for everyone'
+        });
+      }
+
+      // Check time limit (1 hour) for non-admins
+      const messageAge = Date.now() - new Date(message.createdAt).getTime();
+      const oneHour = 60 * 60 * 1000;
+      
+      if (!isAdmin && messageAge > oneHour) {
+        return res.status(400).json({
+          success: false,
+          message: 'You can only delete messages for everyone within 1 hour of sending'
+        });
+      }
+
+      // Mark as deleted for everyone
+      message.deletedForEveryone = true;
+      message.deletedAt = new Date();
+      message.deletedBy.push({ user: userId, deletedAt: new Date(), type: 'forEveryone' });
+      await message.save();
+
+      console.log('✅ Message deleted for everyone');
+
+      // Emit socket event to all participants
+      const io = req.app.get('io');
+      if (io) {
+        const participantIds = group.participants
+          .filter(p => p.isActive !== false)
+          .map(p => (p.user?._id || p.user)?.toString())
+          .filter(Boolean);
+
+        const deleteEvent = {
+          messageId: messageId,
+          conversationId: groupId,
+          groupId: groupId,
+          deleteType: 'forEveryone',
+          deletedBy: userId.toString(),
+          deletedAt: Date.now()
+        };
+
+        participantIds.forEach(participantId => {
+          io.to(`user:${participantId}`).emit('message:deleted', deleteEvent);
+          io.to(`user:${participantId}`).emit('message:delete', deleteEvent);
+        });
+
+        io.to(`conversation:${groupId}`).emit('message:deleted', deleteEvent);
+      }
+
+      res.json({
+        success: true,
+        message: 'Message deleted for everyone'
+      });
+
+    } else {
+      // Delete for me only
+      if (!message.deletedBy) {
+        message.deletedBy = [];
+      }
+
+      // Check if already deleted for this user
+      const alreadyDeleted = message.deletedBy.some(d => 
+        d.user && d.user.toString() === userId.toString()
+      );
+
+      if (alreadyDeleted) {
+        return res.status(400).json({
+          success: false,
+          message: 'Message already deleted'
+        });
+      }
+
+      message.deletedBy.push({ 
+        user: userId, 
+        deletedAt: new Date(),
+        type: 'forMe'
+      });
+      await message.save();
+
+      console.log('✅ Message deleted for user:', userId);
+
+      // Emit socket event only to this user
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user:${userId}`).emit('message:deleted', {
+          messageId: messageId,
+          conversationId: groupId,
+          groupId: groupId,
+          deleteType: 'forMe',
+          userId: userId.toString(),
+          deletedAt: Date.now()
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Message deleted for you'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Delete message error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete message',
+      error: error.message
+    });
+  }
+});
 
 // ==================== SETTINGS ====================
 

@@ -1,205 +1,269 @@
-const express = require('express');
-const router = express.Router();
-const Conversation = require('../models/Conversation');
-const Message = require('../models/Message');
-const User = require('../models/User');
-const { protect } = require('../middleware/auth');
-const { validateCreateConversation, validateUpdateConversation } = require('../middleware/validation');
-const { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } = require('../config/constants');
+// backend/src/routes/chats.js
+// Modern, stable, API-aligned chat routes for ChyraApp
 
-// @route   POST /api/chats
-// @desc    Create new conversation
-// @access  Private
-router.post('/', protect, validateCreateConversation, async (req, res) => {
+const express = require("express");
+const router = express.Router();
+
+const Conversation = require("../models/Conversation");
+const Message = require("../models/Message");
+const User = require("../models/User");
+const { protect } = require("../middleware/auth");
+const {
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} = require("../config/constants");
+
+/**
+ * Helper: emit safely if Socket.IO is available
+ */
+function getIO(req) {
+  return req.app.get("io") || null;
+}
+
+/**
+ * Helper: normalize group name fields for consistency
+ */
+function getConversationName(conv) {
+  return conv.name || conv.groupName || "Group Chat";
+}
+
+/**
+ * POST /api/chats
+ * Create 1:1 or group conversation
+ */
+router.post("/", protect, async (req, res) => {
   try {
     const { participantId, name, isGroup, participants } = req.body;
+    const currentUserId = req.user._id;
+    const io = getIO(req);
 
-    // For 1-on-1 chat
+    // 1️⃣ Direct 1-on-1 chat
     if (!isGroup && participantId) {
-      // Check if conversation already exists
-      const existingConversation = await Conversation.findOne({
+      // Check if 1:1 conversation already exists
+      const existing = await Conversation.findOne({
         isGroup: false,
-        'participants.user': { $all: [req.user._id, participantId] }
-      }).populate('participants.user', 'username fullName profilePicture status');
+        "participants.user": { $all: [currentUserId, participantId] },
+        "participants.isActive": true,
+      })
+        .populate("participants.user", "username fullName profilePicture")
+        .populate("lastMessage");
 
-      if (existingConversation) {
+      if (existing) {
         return res.status(HTTP_STATUS.OK).json({
           success: true,
-          message: 'Conversation already exists',
-          data: { conversation: existingConversation }
+          message: "Conversation already exists",
+          data: { conversation: existing },
         });
       }
 
-      // Create new 1-on-1 conversation
       const conversation = await Conversation.create({
         isGroup: false,
         participants: [
-          { user: req.user._id, role: 'member' },
-          { user: participantId, role: 'member' }
+          { user: currentUserId, role: "member", isActive: true },
+          { user: participantId, role: "member", isActive: true },
         ],
-        createdBy: req.user._id
+        createdBy: currentUserId,
       });
 
-      await conversation.populate('participants.user', 'username fullName profilePicture status');
+      await conversation.populate(
+        "participants.user",
+        "username fullName profilePicture"
+      );
 
-      // Emit to both users via Socket.IO
-      const io = req.app.get('io');
       if (io) {
-        io.to(`user:${participantId}`).emit('conversation:create', conversation);
+        io.to(`user:${participantId}`).emit(
+          "conversation:create",
+          conversation
+        );
       }
 
       return res.status(HTTP_STATUS.CREATED).json({
         success: true,
         message: SUCCESS_MESSAGES.CONVERSATION_CREATED,
-        data: { conversation }
+        data: { conversation },
       });
     }
 
-    // For group chat
-    if (isGroup && participants && participants.length >= 2) {
-      const participantsList = [
-        { user: req.user._id, role: 'admin' },
-        ...participants.map(p => ({ user: p, role: 'member' }))
-      ];
+    // 2️⃣ Group chat
+    if (isGroup && Array.isArray(participants) && participants.length >= 1) {
+      // participants is array of user IDs (excluding current user)
+      const participantDocs = participants.map((p) => ({
+        user: p,
+        role: "member",
+        isActive: true,
+        addedBy: currentUserId,
+        joinedAt: new Date(),
+      }));
 
       const conversation = await Conversation.create({
-        name,
         isGroup: true,
-        participants: participantsList,
-        createdBy: req.user._id
+        name: name || undefined,
+        participants: [
+          {
+            user: currentUserId,
+            role: "admin",
+            isActive: true,
+            joinedAt: new Date(),
+          },
+          ...participantDocs,
+        ],
+        createdBy: currentUserId,
       });
 
-      await conversation.populate('participants.user', 'username fullName profilePicture status');
+      await conversation.populate(
+        "participants.user",
+        "username fullName profilePicture"
+      );
 
-      // Emit to all participants
-      const io = req.app.get('io');
       if (io) {
-        participants.forEach(participantId => {
-          io.to(`user:${participantId}`).emit('conversation:create', conversation);
+        participants.forEach((pId) => {
+          io.to(`user:${pId}`).emit("conversation:create", conversation);
         });
       }
 
       return res.status(HTTP_STATUS.CREATED).json({
         success: true,
         message: SUCCESS_MESSAGES.CONVERSATION_CREATED,
-        data: { conversation }
+        data: { conversation },
       });
     }
 
-    res.status(HTTP_STATUS.BAD_REQUEST).json({
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({
       success: false,
-      message: 'Invalid conversation data'
+      message: "Invalid conversation data",
     });
   } catch (error) {
-    console.error('Create conversation error:', error);
+    console.error("Create conversation error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   GET /api/chats
-// @desc    Get user conversations
-// @access  Private
-router.get('/', protect, async (req, res) => {
+/**
+ * GET /api/chats
+ * Get all conversations for current user
+ */
+router.get("/", protect, async (req, res) => {
   try {
+    const userId = req.user._id;
+
     const conversations = await Conversation.find({
-      'participants.user': req.user._id,
-      'participants.isActive': true,
-      'deletedBy.user': { $ne: req.user._id }
+      "participants.user": userId,
+      "participants.isActive": true,
     })
-      .populate('participants.user', 'username fullName profilePicture status lastSeen')
-      .populate('lastMessage')
+      .populate(
+        "participants.user",
+        "username fullName profilePicture status lastSeen"
+      )
+      .populate("lastMessage")
       .sort({ lastMessageAt: -1 });
 
-    // Get unread count for each conversation
-    const conversationsWithUnread = await Promise.all(
+    // Attach unreadCount for each conversation
+    const withUnread = await Promise.all(
       conversations.map(async (conv) => {
-        const unreadCount = await conv.getUnreadCount(req.user._id);
+        const unreadCount = await conv.getUnreadCount(userId);
+        const obj = conv.toObject();
         return {
-          ...conv.toObject(),
-          unreadCount
+          ...obj,
+          unreadCount,
         };
       })
     );
 
-    res.status(HTTP_STATUS.OK).json({
+    return res.status(HTTP_STATUS.OK).json({
       success: true,
-      data: { conversations: conversationsWithUnread }
+      data: {
+        conversations: withUnread,
+      },
     });
   } catch (error) {
-    console.error('Get conversations error:', error);
+    console.error("Get conversations error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   GET /api/chats/:id
-// @desc    Get conversation by ID
-// @access  Private
-router.get('/:id', protect, async (req, res) => {
+/**
+ * GET /api/chats/:id
+ * Get single conversation (meta only; messages via /api/messages/:conversationId)
+ */
+router.get("/:id", protect, async (req, res) => {
   try {
-    const conversation = await Conversation.findById(req.params.id)
-      .populate('participants.user', 'username fullName profilePicture status lastSeen')
-      .populate('lastMessage');
+    const conversationId = req.params.id;
+
+    // Guard: invalid id could cause ObjectId cast error
+    if (!conversationId || conversationId === "undefined") {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Invalid conversation id",
+      });
+    }
+
+    const conversation = await Conversation.findById(conversationId)
+      .populate(
+        "participants.user",
+        "username fullName profilePicture status lastSeen"
+      )
+      .populate("lastMessage");
 
     if (!conversation) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND
+        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND,
       });
     }
 
-    // Check if user is participant
     if (!conversation.isParticipant(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: ERROR_MESSAGES.NOT_PARTICIPANT
+        message: ERROR_MESSAGES.NOT_PARTICIPANT,
       });
     }
 
     const unreadCount = await conversation.getUnreadCount(req.user._id);
 
-    res.status(HTTP_STATUS.OK).json({
+    return res.status(HTTP_STATUS.OK).json({
       success: true,
       data: {
         conversation: {
           ...conversation.toObject(),
-          unreadCount
-        }
-      }
+          unreadCount,
+        },
+      },
     });
   } catch (error) {
-    console.error('Get conversation error:', error);
+    console.error("Get conversation error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   PUT /api/chats/:id
-// @desc    Update conversation
-// @access  Private
-router.put('/:id', protect, validateUpdateConversation, async (req, res) => {
+/**
+ * PUT /api/chats/:id
+ * Update conversation (name, description, settings, picture)
+ */
+router.put("/:id", protect, async (req, res) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
 
     if (!conversation) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND
+        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND,
       });
     }
 
-    // Check if user is admin (for group chats)
     if (conversation.isGroup && !conversation.isAdmin(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: ERROR_MESSAGES.NOT_ADMIN
+        message: ERROR_MESSAGES.NOT_ADMIN,
       });
     }
 
@@ -208,132 +272,151 @@ router.put('/:id', protect, validateUpdateConversation, async (req, res) => {
     if (name) conversation.name = name;
     if (description !== undefined) conversation.description = description;
     if (groupPicture) conversation.groupPicture = groupPicture;
-    if (settings) conversation.settings = { ...conversation.settings, ...settings };
+    if (settings) {
+      conversation.settings = {
+        ...conversation.settings,
+        ...settings,
+      };
+    }
 
     await conversation.save();
-    await conversation.populate('participants.user', 'username fullName profilePicture status');
+    await conversation.populate(
+      "participants.user",
+      "username fullName profilePicture status"
+    );
 
-    // Emit update to all participants
-    const io = req.app.get('io');
+    const io = getIO(req);
     if (io) {
-      io.to(`conversation:${conversation._id}`).emit('conversation:update', conversation);
+      io.to(`conversation:${conversation._id}`).emit(
+        "conversation:update",
+        conversation
+      );
     }
 
     res.status(HTTP_STATUS.OK).json({
       success: true,
       message: SUCCESS_MESSAGES.CONVERSATION_UPDATED,
-      data: { conversation }
+      data: { conversation },
     });
   } catch (error) {
-    console.error('Update conversation error:', error);
+    console.error("Update conversation error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   DELETE /api/chats/:id
-// @desc    Delete conversation (soft delete for user)
-// @access  Private
-router.delete('/:id', protect, async (req, res) => {
+/**
+ * DELETE /api/chats/:id
+ * Soft-delete / leave conversation for current user
+ * (we use participants.isActive = false for that user)
+ */
+router.delete("/:id", protect, async (req, res) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
 
     if (!conversation) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND
+        message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND,
       });
     }
 
     if (!conversation.isParticipant(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: ERROR_MESSAGES.NOT_PARTICIPANT
+        message: ERROR_MESSAGES.NOT_PARTICIPANT,
       });
     }
 
-    // Soft delete for user
-    conversation.deletedBy.push({ user: req.user._id });
+    // Use model helper to "leave" / deactivate membership
+    conversation.removeMember(req.user._id);
     await conversation.save();
 
-    res.status(HTTP_STATUS.OK).json({
+    return res.status(HTTP_STATUS.OK).json({
       success: true,
-      message: SUCCESS_MESSAGES.CONVERSATION_DELETED
+      message: SUCCESS_MESSAGES.CONVERSATION_DELETED,
     });
   } catch (error) {
-    console.error('Delete conversation error:', error);
+    console.error("Delete conversation error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   POST /api/chats/:id/participants
-// @desc    Add participant to group
-// @access  Private
-router.post('/:id/participants', protect, async (req, res) => {
+/**
+ * POST /api/chats/:id/participants
+ * Add participant to group
+ */
+router.post("/:id/participants", protect, async (req, res) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
+    const { userId } = req.body;
 
     if (!conversation || !conversation.isGroup) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: 'Group conversation not found'
+        message: "Group conversation not found",
       });
     }
 
     if (!conversation.isAdmin(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: ERROR_MESSAGES.NOT_ADMIN
+        message: ERROR_MESSAGES.NOT_ADMIN,
       });
     }
 
-    const { userId } = req.body;
-    
     const userToAdd = await User.findById(userId);
     if (!userToAdd) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
       });
     }
 
-    conversation.addParticipant(userId);
+    // Use model helper defined in Conversation schema
+    conversation.addMember(userId, req.user._id);
     await conversation.save();
-    await conversation.populate('participants.user', 'username fullName profilePicture status');
+    await conversation.populate(
+      "participants.user",
+      "username fullName profilePicture status"
+    );
 
-    // Emit to all participants
-    const io = req.app.get('io');
+    const io = getIO(req);
     if (io) {
-      io.to(`conversation:${conversation._id}`).emit('conversation:participant_added', {
-        conversation,
-        addedUser: userToAdd
-      });
-      io.to(`user:${userId}`).emit('conversation:added', conversation);
+      io.to(`conversation:${conversation._id}`).emit(
+        "conversation:participant_added",
+        {
+          conversation,
+          addedUser: userToAdd,
+        }
+      );
+      io.to(`user:${userId}`).emit("conversation:added", conversation);
     }
 
     res.status(HTTP_STATUS.OK).json({
       success: true,
       message: SUCCESS_MESSAGES.PARTICIPANT_ADDED,
-      data: { conversation }
+      data: { conversation },
     });
   } catch (error) {
-    console.error('Add participant error:', error);
+    console.error("Add participant error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
 
-// @route   DELETE /api/chats/:id/participants/:userId
-// @desc    Remove participant from group
-// @access  Private
-router.delete('/:id/participants/:userId', protect, async (req, res) => {
+/**
+ * DELETE /api/chats/:id/participants/:userId
+ * Remove participant from group
+ */
+router.delete("/:id/participants/:userId", protect, async (req, res) => {
   try {
     const conversation = await Conversation.findById(req.params.id);
     const { userId } = req.params;
@@ -341,39 +424,43 @@ router.delete('/:id/participants/:userId', protect, async (req, res) => {
     if (!conversation || !conversation.isGroup) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
         success: false,
-        message: 'Group conversation not found'
+        message: "Group conversation not found",
       });
     }
 
-    // User can remove themselves or admin can remove others
-    if (userId !== req.user._id.toString() && !conversation.isAdmin(req.user._id)) {
+    const isSelf = userId === req.user._id.toString();
+
+    if (!isSelf && !conversation.isAdmin(req.user._id)) {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: ERROR_MESSAGES.NOT_ADMIN
+        message: ERROR_MESSAGES.NOT_ADMIN,
       });
     }
 
-    conversation.removeParticipant(userId);
+    // Use model helper
+    conversation.removeMember(userId);
     await conversation.save();
 
-    // Emit to all participants
-    const io = req.app.get('io');
+    const io = getIO(req);
     if (io) {
-      io.to(`conversation:${conversation._id}`).emit('conversation:participant_removed', {
-        conversationId: conversation._id,
-        removedUserId: userId
-      });
+      io.to(`conversation:${conversation._id}`).emit(
+        "conversation:participant_removed",
+        {
+          conversationId: conversation._id,
+          removedUserId: userId,
+        }
+      );
     }
 
     res.status(HTTP_STATUS.OK).json({
       success: true,
-      message: SUCCESS_MESSAGES.PARTICIPANT_REMOVED
+      message: SUCCESS_MESSAGES.PARTICIPANT_REMOVED,
     });
   } catch (error) {
-    console.error('Remove participant error:', error);
+    console.error("Remove participant error:", error);
     res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: ERROR_MESSAGES.SERVER_ERROR
+      message: ERROR_MESSAGES.SERVER_ERROR,
     });
   }
 });
